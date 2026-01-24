@@ -1,0 +1,127 @@
+[project]
+name = "ai-cli-toolbox"
+version = "0.1.0"
+description = "CLI toolbox for AI agents - file summarization, PDF conversion, and utility scripts for Claude Code"
+readme = "README.md"
+authors = [
+    { name = "Jakub Kolar" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    # Add runtime dependencies here
+]
+
+[project.scripts]
+# CLI entry points - add as tools are developed
+# ai-summarize = "ai_cli_toolbox.summarize:main"
+# ai-pdf2md = "ai_cli_toolbox.pdf2md:main"
+
+[dependency-groups]
+dev = [
+    # Type checking (ty replaces mypy - 10-100x faster)
+    "ty",
+    # Linting and formatting
+    "ruff",
+    # Testing
+    "pytest",
+    "pytest-asyncio",
+]
+
+# ============================================================================
+# Build System
+# ============================================================================
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_cli_toolbox"]
+
+# ============================================================================
+# Ruff (Linting + Formatting)
+# ============================================================================
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E", "F",      # pycodestyle errors, pyflakes
+    "A", "ANN",    # builtins shadowing, annotations
+    "ARG", "B",    # unused arguments, bugbear
+    "BLE", "C4",   # blind except, comprehensions
+    "C90", "D",    # mccabe complexity, pydocstyle
+    "DOC", "DTZ",  # docstrings, datetime
+    "EM", "ERA",   # error messages, eradicate
+    "EXE", "FA",   # executable, future annotations
+    "FBT", "FIX",  # boolean trap, fixme
+    "FLY", "G",    # f-strings, logging format
+    "I", "ICN",    # isort, import conventions
+    "INP", "ISC",  # implicit namespace, string concat
+    "LOG", "N",    # logging, naming
+    "PERF", "PGH", # performance, pygrep hooks
+    "PIE", "PLC",  # misc, pylint convention
+    "PLE", "PLR",  # pylint error, refactor
+    "PLW", "PT",   # pylint warning, pytest
+    "PTH", "RET",  # pathlib, return
+    "RSE", "RUF",  # raise, ruff-specific
+    "S", "SIM",    # bandit security, simplify
+    "SLF", "SLOT", # private access, slots
+    "T10", "T20",  # debugger, print
+    "TC", "TD",    # type checking, todos
+    "TID", "UP",   # tidy imports, pyupgrade
+    "FURB", "PYI", # refurb, pyi stubs
+]
+ignore = [
+    "INP001",  # implicit-namespace-package - we use namespace packages
+    "B901",    # return-in-generator
+    "EM101",   # raw-string-in-exception
+    "EM102",   # f-string-in-exception
+    "DOC201",  # docstring-missing-returns - pep257 compat
+    "DOC501",  # docstring-missing-exception - pep257 compat
+    "DOC402",  # docstring-missing-yields - pep257 compat
+    "PLR2004", # magic-value-comparison - too restrictive
+    "FIX002",  # line-contains-todo - we want todos
+    "TD003",   # missing-todo-link - no issue tracker requirement
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "TD002", "TD003", "TD004", "TD005", "TD007",
+    "ANN201", "ANN202",
+    "S101",
+    "PLR2004",
+    "PLR6301",
+    "TC001",
+    "PLR0914",
+    "PLR0904",
+]
+"scripts/**/*.py" = [
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "T201",
+    "BLE001",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ============================================================================
+# ty (Type Checking)
+# ============================================================================
+
+[tool.ty.terminal]
+error-on-warning = true
+
+# ============================================================================
+# pytest
+# ============================================================================
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --basetemp=.test_data"
+testpaths = ["tests"]
