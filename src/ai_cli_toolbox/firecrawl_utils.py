@@ -245,12 +245,13 @@ def main_map() -> None:
     result = client.map(args.url, **map_params)
 
     links = result.links or []
+    urls = [link.url for link in links]
 
     if args.json:
-        print(json.dumps(links, indent=2))
+        print(json.dumps(urls, indent=2))
     else:
-        for link in links:
-            print(link)
+        for url in urls:
+            print(url)
 
     _print_credits(1)
 
