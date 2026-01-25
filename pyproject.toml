@@ -8,11 +8,17 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    # Add runtime dependencies here
+    "firecrawl-py",
+    "python-dotenv",
+    "tqdm",
 ]
 
 [project.scripts]
 yt-transcript = "ai_cli_toolbox.yt_transcript:main"
+firecrawl-scrape = "ai_cli_toolbox.firecrawl_utils:main_scrape"
+firecrawl-search = "ai_cli_toolbox.firecrawl_utils:main_search"
+firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
+firecrawl-crawl = "ai_cli_toolbox.firecrawl_utils:main_crawl"
 
 [dependency-groups]
 dev = [
