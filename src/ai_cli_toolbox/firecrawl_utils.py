@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
+from firecrawl.types import ScrapeOptions
 from tqdm import tqdm
 
 
@@ -147,7 +148,7 @@ def main_scrape() -> None:
             sys.exit(0)
 
     client = _get_client()
-    result = client.scrape_url(
+    result = client.scrape(
         args.url,
         formats=["markdown"],
         only_main_content=not args.full_page,
@@ -313,10 +314,7 @@ def main_crawl() -> None:
 
     crawl_params: dict[str, object] = {
         "limit": args.limit,
-        "scrape_options": {
-            "formats": ["markdown"],
-            "onlyMainContent": True,
-        },
+        "scrape_options": ScrapeOptions(formats=["markdown"], only_main_content=True),
         "poll_interval": 5,
     }
 
@@ -332,8 +330,8 @@ def main_crawl() -> None:
         crawl_params["ignore_sitemap"] = args.sitemap == "skip"
 
     try:
-        result = client.crawl.crawl_url(args.url, **crawl_params)
-    except Exception as e:
+        result = client.crawl(args.url, **crawl_params)
+    except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"Crawl failed: {e}\n")
         sys.exit(1)
 
@@ -372,9 +370,7 @@ def main_crawl() -> None:
     if skipped_count > 0:
         sys.stderr.write(f"Skipped {skipped_count} existing files\n")
 
-    # Use actual credits from API response if available, otherwise estimate from page count
-    credits = getattr(result, "credits_used", None) or len(pages)
-    _print_credits(credits)
+    _print_credits(result.credits_used)
 
 
 if __name__ == "__main__":
