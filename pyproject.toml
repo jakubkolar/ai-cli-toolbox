@@ -47,6 +47,7 @@ packages = ["src/ai_cli_toolbox"]
 line-length = 120
 
 [tool.ruff.lint]
+preview = true  # Enable preview rules like DOC from pydoclint
 select = [
     "E", "F",      # pycodestyle errors, pyflakes
     "A", "ANN",    # builtins shadowing, annotations
