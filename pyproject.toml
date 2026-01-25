@@ -1,6 +1,6 @@
 [project]
 name = "ai-cli-toolbox"
-version = "0.1.0"
+dynamic = ["version"]
 description = "CLI toolbox for AI agents - file summarization, PDF conversion, and utility scripts for Claude Code"
 readme = "README.md"
 authors = [
@@ -32,8 +32,11 @@ dev = [
 # ============================================================================
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "uv-dynamic-versioning"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ai_cli_toolbox"]
