@@ -99,7 +99,7 @@ def _print_credits(credits_used: int) -> None:
     sys.stderr.write(f"Credits used: {credits_used}\n")
 
 
-def _check_output_exists(path: Path, force: bool) -> bool:
+def _check_output_exists(path: Path, *, force: bool) -> bool:
     """Check if output file exists and should be skipped.
 
     :param path: Path to check.
@@ -144,7 +144,7 @@ def main_scrape() -> None:
 
     if args.output:
         output_path = Path(args.output)
-        if _check_output_exists(output_path, args.force):
+        if _check_output_exists(output_path, force=args.force):
             sys.exit(0)
 
     client = _get_client()
@@ -193,8 +193,8 @@ def main_search() -> None:
     args = parser.parse_args()
 
     if args.dry_run:
-        credits = (args.limit + 9) // 10 * 2  # 2 credits per 10 results
-        sys.stderr.write(f"Estimated credits: {credits}\n")
+        estimated = (args.limit + 9) // 10 * 2  # 2 credits per 10 results
+        sys.stderr.write(f"Estimated credits: {estimated}\n")
         sys.exit(0)
 
     client = _get_client()
