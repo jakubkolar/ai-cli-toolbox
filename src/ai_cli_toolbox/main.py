@@ -2,7 +2,7 @@
 
 
 def main() -> None:
-    """Main entry point."""
+    """Run the ai-cli-toolbox main entry point."""
     print("ai-cli-toolbox")  # noqa: T201
 
 

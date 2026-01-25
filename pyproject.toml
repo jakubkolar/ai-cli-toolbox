@@ -12,9 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-# CLI entry points - add as tools are developed
-# ai-summarize = "ai_cli_toolbox.summarize:main"
-# ai-pdf2md = "ai_cli_toolbox.pdf2md:main"
+yt-transcript = "ai_cli_toolbox.yt_transcript:main"
 
 [dependency-groups]
 dev = [
@@ -103,11 +101,6 @@ convention = "pep257"
     "TC001",
     "PLR0914",
     "PLR0904",
-]
-"scripts/**/*.py" = [
-    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
-    "T201",
-    "BLE001",
 ]
 
 [tool.ruff.format]
