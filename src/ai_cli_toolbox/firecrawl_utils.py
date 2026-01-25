@@ -201,7 +201,7 @@ def main_search() -> None:
     client = _get_client()
     result = client.search(args.query, limit=args.limit)
 
-    results_data = result.data or []
+    results_data = result.web or []
 
     if args.json:
         json_output = [
@@ -275,7 +275,7 @@ def main_map() -> None:
 # Entry Point: firecrawl-crawl
 # =============================================================================
 
-CRAWL_POLL_INTERVAL = 5
+CRAWL_POLL_INTERVAL = 2
 
 
 def _build_crawl_request(url: str, args: argparse.Namespace) -> CrawlRequest:
