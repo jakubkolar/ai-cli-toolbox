@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
-from firecrawl.types import CrawlJob, CrawlRequest, Document, ScrapeOptions
+from firecrawl.types import CrawlJob, Document, ScrapeOptions
 from tqdm import tqdm
 
 
@@ -267,20 +267,6 @@ def main_map() -> None:
 CRAWL_POLL_INTERVAL = 2
 
 
-def _build_crawl_request(url: str, args: argparse.Namespace) -> CrawlRequest:
-    """Build CrawlRequest from CLI arguments."""
-    return CrawlRequest(
-        url=url,
-        limit=args.limit,
-        max_discovery_depth=args.max_depth,
-        include_paths=args.include_path,
-        exclude_paths=args.exclude_path,
-        allow_subdomains=args.allow_subdomains,
-        sitemap=args.sitemap,
-        scrape_options=ScrapeOptions(formats=["markdown"], only_main_content=True),
-    )
-
-
 def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -> str:
     """Save a single crawled page to file.
 
@@ -364,8 +350,16 @@ def main_crawl() -> None:
     client = _get_client()
 
     # Start crawl job
-    request = _build_crawl_request(args.url, args)
-    job = client.start_crawl(request)
+    job = client.start_crawl(
+        args.url,
+        limit=args.limit,
+        max_discovery_depth=args.max_depth,
+        include_paths=args.include_path,
+        exclude_paths=args.exclude_path,
+        allow_subdomains=args.allow_subdomains,
+        sitemap=args.sitemap,
+        scrape_options=ScrapeOptions(formats=["markdown"], only_main_content=True),
+    )
     job_id = job.id
 
     # Poll until complete, always save whatever we got
