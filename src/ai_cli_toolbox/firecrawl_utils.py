@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
-from firecrawl.types import ScrapeOptions
+from firecrawl.types import Document, ScrapeOptions
 from tqdm import tqdm
 
 
@@ -34,10 +34,10 @@ def _get_client() -> Firecrawl:
     """
     load_dotenv()
     api_key = os.environ.get("FIRECRAWL_API_KEY")
-    if not api_key:
+    if api_key is None:
         sys.stderr.write("Error: FIRECRAWL_API_KEY environment variable not set\n")
         sys.exit(1)
-    return Firecrawl(api_key=api_key)
+    return Firecrawl(api_key=api_key)  # ty: ignore[invalid-argument-type]
 
 
 def _format_markdown_output(content: str, title: str, url: str) -> str:
@@ -219,8 +219,8 @@ def main_search() -> None:
             print(item.description or "No description")
             print("\n---\n")
 
-    credits = (len(results_data) + 9) // 10 * 2
-    _print_credits(credits)
+    used = (len(results_data) + 9) // 10 * 2
+    _print_credits(used)
 
 
 # =============================================================================
@@ -257,7 +257,7 @@ def main_map() -> None:
     if args.search:
         map_params["search"] = args.search
 
-    result = client.map_url(args.url, **map_params)
+    result = client.map(args.url, **map_params)
 
     links = result.links or []
 
@@ -275,11 +275,51 @@ def main_map() -> None:
 # =============================================================================
 
 
-def main_crawl() -> None:
-    """Entry point for firecrawl-crawl command.
+def _build_crawl_params(args: argparse.Namespace) -> dict[str, object]:
+    """Build crawl parameters from CLI arguments."""
+    params: dict[str, object] = {
+        "limit": args.limit,
+        "scrape_options": ScrapeOptions(formats=["markdown"], only_main_content=True),
+        "poll_interval": 5,
+    }
+    if args.max_depth is not None:
+        params["max_depth"] = args.max_depth
+    if args.include_path:
+        params["include_paths"] = args.include_path
+    if args.exclude_path:
+        params["exclude_paths"] = args.exclude_path
+    if args.allow_subdomains:
+        params["allow_subdomains"] = True
+    if args.sitemap != "include":
+        params["ignore_sitemap"] = args.sitemap == "skip"
+    return params
 
-    Crawls multiple pages from a website and saves to files.
+
+def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -> str:
+    """Save a single crawled page to file.
+
+    :return: "saved", "skipped", or "no_url"
     """
+    page_url = page.metadata.source_url if page.metadata else ""
+    if not page_url:
+        return "no_url"
+
+    file_path = output_dir / _slugify_url(page_url)
+
+    if skip_existing and file_path.exists():
+        return "skipped"
+
+    if file_path.exists():
+        sys.stderr.write(f"Overwriting: {file_path}\n")
+
+    title = page.metadata.title if page.metadata and page.metadata.title else "Untitled"
+    content = page.markdown or ""
+    file_path.write_text(_format_markdown_output(content, title, page_url))
+    return "saved"
+
+
+def main_crawl() -> None:
+    """Entry point for firecrawl-crawl command."""
     parser = argparse.ArgumentParser(
         prog="firecrawl-crawl",
         description="Crawl multiple pages and save to files",
@@ -301,7 +341,6 @@ def main_crawl() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Show estimated credits without crawling")
 
     args = parser.parse_args()
-
     output_dir = Path(args.output)
 
     if args.dry_run:
@@ -309,61 +348,25 @@ def main_crawl() -> None:
         sys.exit(0)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
     client = _get_client()
 
-    crawl_params: dict[str, object] = {
-        "limit": args.limit,
-        "scrape_options": ScrapeOptions(formats=["markdown"], only_main_content=True),
-        "poll_interval": 5,
-    }
-
-    if args.max_depth is not None:
-        crawl_params["max_depth"] = args.max_depth
-    if args.include_path:
-        crawl_params["include_paths"] = args.include_path
-    if args.exclude_path:
-        crawl_params["exclude_paths"] = args.exclude_path
-    if args.allow_subdomains:
-        crawl_params["allow_subdomains"] = True
-    if args.sitemap != "include":
-        crawl_params["ignore_sitemap"] = args.sitemap == "skip"
-
     try:
-        result = client.crawl(args.url, **crawl_params)
+        result = client.crawl(args.url, **_build_crawl_params(args))
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"Crawl failed: {e}\n")
         sys.exit(1)
 
     pages = result.data or []
-
     saved_count = 0
     skipped_count = 0
 
     with tqdm(total=len(pages), desc="Saving pages", unit="page") as pbar:
         for page in pages:
-            page_url = page.metadata.source_url if page.metadata else ""
-            if not page_url:
-                pbar.update(1)
-                continue
-
-            filename = _slugify_url(page_url)
-            file_path = output_dir / filename
-
-            if args.skip_existing and file_path.exists():
+            status = _save_crawl_page(page, output_dir, skip_existing=args.skip_existing)
+            if status == "saved":
+                saved_count += 1
+            elif status == "skipped":
                 skipped_count += 1
-                pbar.update(1)
-                continue
-
-            if file_path.exists():
-                sys.stderr.write(f"Overwriting: {file_path}\n")
-
-            title = page.metadata.title if page.metadata else "Untitled"
-            content = page.markdown or ""
-            output = _format_markdown_output(content, title, page_url)
-
-            file_path.write_text(output)
-            saved_count += 1
             pbar.update(1)
 
     sys.stderr.write(f"Saved {saved_count} pages to {output_dir}/\n")
