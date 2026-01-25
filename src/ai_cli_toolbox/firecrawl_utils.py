@@ -245,13 +245,17 @@ def main_map() -> None:
     result = client.map(args.url, **map_params)
 
     links = result.links or []
-    urls = [link.url for link in links]
 
     if args.json:
-        print(json.dumps(urls, indent=2))
+        json_output = [
+            {"url": link.url, "title": link.title or "", "description": link.description or ""}
+            for link in links
+        ]
+        print(json.dumps(json_output, indent=2))
     else:
-        for url in urls:
-            print(url)
+        for link in links:
+            title = f" - {link.title}" if link.title else ""
+            print(f"{link.url}{title}")
 
     _print_credits(1)
 
