@@ -135,13 +135,8 @@ def main_scrape() -> None:
         help="Include navigation/footer (default: main content only)",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing output file")
-    parser.add_argument("--dry-run", action="store_true", help="Show estimated credits without scraping")
 
     args = parser.parse_args()
-
-    if args.dry_run:
-        sys.stderr.write("Estimated credits: 1\n")
-        sys.exit(0)
 
     if args.output:
         output_path = Path(args.output)
@@ -189,14 +184,8 @@ def main_search() -> None:
     parser.add_argument("query", help="Search query")
     parser.add_argument("--limit", type=int, default=10, help="Number of results (default: 10)")
     parser.add_argument("--json", action="store_true", help="Output as JSON array")
-    parser.add_argument("--dry-run", action="store_true", help="Show estimated credits without searching")
 
     args = parser.parse_args()
-
-    if args.dry_run:
-        estimated = (args.limit + 9) // 10 * 2  # 2 credits per 10 results
-        sys.stderr.write(f"Estimated credits: {estimated}\n")
-        sys.exit(0)
 
     client = _get_client()
     result = client.search(args.query, limit=args.limit)
@@ -242,13 +231,8 @@ def main_map() -> None:
     parser.add_argument("--limit", type=int, help="Maximum URLs to return")
     parser.add_argument("--json", action="store_true", help="Output as JSON array")
     parser.add_argument("--search", help="Filter URLs containing this string")
-    parser.add_argument("--dry-run", action="store_true", help="Show estimated credits without mapping")
 
     args = parser.parse_args()
-
-    if args.dry_run:
-        sys.stderr.write("Estimated credits: 1\n")
-        sys.exit(0)
 
     client = _get_client()
 
@@ -367,14 +351,9 @@ def main_crawl() -> None:
         help="How to use sitemap (default: include)",
     )
     parser.add_argument("--skip-existing", action="store_true", help="Skip pages whose output file already exists")
-    parser.add_argument("--dry-run", action="store_true", help="Show estimated credits without crawling")
 
     args = parser.parse_args()
     output_dir = Path(args.output)
-
-    if args.dry_run:
-        sys.stderr.write(f"Estimated credits: up to {args.limit}\n")
-        sys.exit(0)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     client = _get_client()
