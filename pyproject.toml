@@ -14,7 +14,6 @@ dependencies = [
 ]
 
 [project.scripts]
-yt-transcript = "ai_cli_toolbox.yt_transcript:main"
 firecrawl-scrape = "ai_cli_toolbox.firecrawl_utils:main_scrape"
 firecrawl-search = "ai_cli_toolbox.firecrawl_utils:main_search"
 firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
@@ -108,6 +107,9 @@ convention = "pep257"
     "TC001",
     "PLR0914",
     "PLR0904",
+]
+"src/ai_cli_toolbox/*_utils.py" = [
+    "T201",  # print statements are the primary output mechanism for CLI tools
 ]
 
 [tool.ruff.format]

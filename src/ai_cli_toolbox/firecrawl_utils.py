@@ -165,7 +165,7 @@ def main_scrape() -> None:
         output_path.write_text(output)
         sys.stderr.write(f"Saved to: {output_path}\n")
     else:
-        print(output)  # noqa: T201
+        print(output)
 
     _print_credits(1)
 
@@ -199,7 +199,7 @@ def main_search() -> None:
     client = _get_client()
     result = client.search(args.query, limit=args.limit)
 
-    results_data = result.data if result.data else []
+    results_data = result.data or []
 
     if args.json:
         json_output = [
@@ -210,13 +210,13 @@ def main_search() -> None:
             }
             for item in results_data
         ]
-        print(json.dumps(json_output, indent=2))  # noqa: T201
+        print(json.dumps(json_output, indent=2))
     else:
         for item in results_data:
-            print(f"## {item.title or 'Untitled'}")  # noqa: T201
-            print(f"URL: {item.url}")  # noqa: T201
-            print(item.description or "No description")  # noqa: T201
-            print("\n---\n")  # noqa: T201
+            print(f"## {item.title or 'Untitled'}")
+            print(f"URL: {item.url}")
+            print(item.description or "No description")
+            print("\n---\n")
 
     credits = (len(results_data) + 9) // 10 * 2
     _print_credits(credits)
@@ -258,13 +258,13 @@ def main_map() -> None:
 
     result = client.map_url(args.url, **map_params)
 
-    links = result.links if result.links else []
+    links = result.links or []
 
     if args.json:
-        print(json.dumps(links, indent=2))  # noqa: T201
+        print(json.dumps(links, indent=2))
     else:
         for link in links:
-            print(link)  # noqa: T201
+            print(link)
 
     _print_credits(1)
 
@@ -332,12 +332,12 @@ def main_crawl() -> None:
         crawl_params["ignore_sitemap"] = args.sitemap == "skip"
 
     try:
-        result = client.crawl_url(args.url, **crawl_params)
+        result = client.crawl.crawl_url(args.url, **crawl_params)
     except Exception as e:
         sys.stderr.write(f"Crawl failed: {e}\n")
         sys.exit(1)
 
-    pages = result.data if result.data else []
+    pages = result.data or []
 
     saved_count = 0
     skipped_count = 0
@@ -372,7 +372,9 @@ def main_crawl() -> None:
     if skipped_count > 0:
         sys.stderr.write(f"Skipped {skipped_count} existing files\n")
 
-    _print_credits(len(pages))
+    # Use actual credits from API response if available, otherwise estimate from page count
+    credits = getattr(result, "credits_used", None) or len(pages)
+    _print_credits(credits)
 
 
 if __name__ == "__main__":
