@@ -13,13 +13,14 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
-from firecrawl.types import Document, ScrapeOptions
+from firecrawl.types import CrawlJob, CrawlRequest, Document, ScrapeOptions
 from tqdm import tqdm
 
 
@@ -274,25 +275,21 @@ def main_map() -> None:
 # Entry Point: firecrawl-crawl
 # =============================================================================
 
+CRAWL_POLL_INTERVAL = 5
 
-def _build_crawl_params(args: argparse.Namespace) -> dict[str, object]:
-    """Build crawl parameters from CLI arguments."""
-    params: dict[str, object] = {
-        "limit": args.limit,
-        "scrape_options": ScrapeOptions(formats=["markdown"], only_main_content=True),
-        "poll_interval": 5,
-    }
-    if args.max_depth is not None:
-        params["max_depth"] = args.max_depth
-    if args.include_path:
-        params["include_paths"] = args.include_path
-    if args.exclude_path:
-        params["exclude_paths"] = args.exclude_path
-    if args.allow_subdomains:
-        params["allow_subdomains"] = True
-    if args.sitemap != "include":
-        params["ignore_sitemap"] = args.sitemap == "skip"
-    return params
+
+def _build_crawl_request(url: str, args: argparse.Namespace) -> CrawlRequest:
+    """Build CrawlRequest from CLI arguments."""
+    return CrawlRequest(
+        url=url,
+        limit=args.limit,
+        max_discovery_depth=args.max_depth,
+        include_paths=args.include_path,
+        exclude_paths=args.exclude_path,
+        allow_subdomains=args.allow_subdomains,
+        sitemap=args.sitemap,
+        scrape_options=ScrapeOptions(formats=["markdown"], only_main_content=True),
+    )
 
 
 def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -> str:
@@ -309,13 +306,45 @@ def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -
     if skip_existing and file_path.exists():
         return "skipped"
 
-    if file_path.exists():
-        sys.stderr.write(f"Overwriting: {file_path}\n")
-
     title = page.metadata.title if page.metadata and page.metadata.title else "Untitled"
     content = page.markdown or ""
     file_path.write_text(_format_markdown_output(content, title, page_url))
     return "saved"
+
+
+def _save_all_pages(
+    pages: list[Document], output_dir: Path, *, skip_existing: bool
+) -> tuple[int, int]:
+    """Save all crawled pages to files.
+
+    :return: Tuple of (saved_count, skipped_count)
+    """
+    saved_count = 0
+    skipped_count = 0
+    for page in pages:
+        status = _save_crawl_page(page, output_dir, skip_existing=skip_existing)
+        if status == "saved":
+            saved_count += 1
+        elif status == "skipped":
+            skipped_count += 1
+    return saved_count, skipped_count
+
+
+def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int) -> CrawlJob:
+    """Poll crawl status with tqdm progress until complete/failed/cancelled."""
+    with tqdm(total=limit, desc="Crawling", unit="page") as pbar:
+        while True:
+            status = client.get_crawl_status(job_id)
+
+            # Update progress bar
+            pbar.total = status.total or limit
+            pbar.n = status.completed
+            pbar.refresh()
+
+            if status.status in {"completed", "failed", "cancelled"}:
+                return status
+
+            time.sleep(CRAWL_POLL_INTERVAL)
 
 
 def main_crawl() -> None:
@@ -350,30 +379,34 @@ def main_crawl() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     client = _get_client()
 
+    # Start crawl job
+    request = _build_crawl_request(args.url, args)
+    job = client.start_crawl(request)
+    job_id = job.id
+
+    # Poll until complete, always save whatever we got
     try:
-        result = client.crawl(args.url, **_build_crawl_params(args))
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"Crawl failed: {e}\n")
-        sys.exit(1)
+        result = _poll_crawl_status(client, job_id, args.limit)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted. Saving crawled pages...\n")
+        result = client.get_crawl_status(job_id)
 
     pages = result.data or []
-    saved_count = 0
-    skipped_count = 0
-
-    with tqdm(total=len(pages), desc="Saving pages", unit="page") as pbar:
-        for page in pages:
-            status = _save_crawl_page(page, output_dir, skip_existing=args.skip_existing)
-            if status == "saved":
-                saved_count += 1
-            elif status == "skipped":
-                skipped_count += 1
-            pbar.update(1)
+    saved_count, skipped_count = _save_all_pages(pages, output_dir, skip_existing=args.skip_existing)
 
     sys.stderr.write(f"Saved {saved_count} pages to {output_dir}/\n")
     if skipped_count > 0:
         sys.stderr.write(f"Skipped {skipped_count} existing files\n")
 
     _print_credits(result.credits_used)
+
+    # Exit with error if crawl failed/cancelled
+    if result.status == "failed":
+        sys.stderr.write("Crawl failed\n")
+        sys.exit(1)
+    if result.status == "cancelled":
+        sys.stderr.write("Crawl was cancelled\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
