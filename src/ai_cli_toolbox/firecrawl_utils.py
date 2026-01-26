@@ -303,17 +303,15 @@ def _save_all_pages(pages: list[Document], output_dir: Path, *, skip_existing: b
 
 def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int) -> CrawlJob:
     """Poll crawl status until complete/failed/cancelled, printing progress to stderr."""
-    last_scraped = 0
     while True:
         status = client.get_crawl_status(job_id)
 
         # Track progress via scraped page count
-        scraped = len(status.data or [])
+        scraped = status.completed
         total = status.total or limit
 
-        if scraped != last_scraped:
-            sys.stderr.write(f"Crawling: {scraped}/{total} pages scraped\n")
-            last_scraped = scraped
+        # Debug: show actual status value
+        sys.stderr.write(f"[status={status.status}] Crawling: {scraped}/{total} pages\n")
 
         if status.status in {"completed", "failed", "cancelled"}:
             return status
@@ -387,4 +385,4 @@ def main_crawl() -> None:
 
 
 if __name__ == "__main__":
-    main_scrape()
+    main_crawl()
