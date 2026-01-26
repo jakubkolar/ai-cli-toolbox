@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
-from firecrawl.types import CrawlJob, Document, ScrapeOptions
+from firecrawl.types import CrawlErrorsResponse, CrawlJob, Document, ScrapeOptions
 
 
 def _get_client() -> Firecrawl:
@@ -319,6 +319,20 @@ def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int) -> CrawlJob:
         time.sleep(CRAWL_POLL_INTERVAL)
 
 
+def _print_crawl_errors(client: Firecrawl, job_id: str) -> None:
+    """Fetch and print crawl errors to stderr."""
+    try:
+        errors_response: CrawlErrorsResponse = client.get_crawl_errors(job_id)
+        if errors_response.errors:
+            sys.stderr.write("Errors:\n")
+            for err in errors_response.errors:
+                sys.stderr.write(f"  - {err.url}: {err.error}\n")
+        if errors_response.robots_blocked:
+            sys.stderr.write(f"Blocked by robots.txt: {len(errors_response.robots_blocked)} URLs\n")
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"Could not fetch error details: {e}\n")
+
+
 def main_crawl() -> None:
     """Entry point for firecrawl-crawl command."""
     parser = argparse.ArgumentParser(
@@ -363,7 +377,11 @@ def main_crawl() -> None:
     try:
         result = _poll_crawl_status(client, job_id, args.limit)
     except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted. Saving crawled pages...\n")
+        sys.stderr.write("\nInterrupted. Cancelling crawl job...\n")
+        try:
+            client.cancel_crawl(job_id)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Failed to cancel crawl: {e}\n")
         result = client.get_crawl_status(job_id)
 
     pages = result.data or []
@@ -377,7 +395,8 @@ def main_crawl() -> None:
 
     # Exit with error if crawl failed/cancelled
     if result.status == "failed":
-        sys.stderr.write("Crawl failed\n")
+        sys.stderr.write("Crawl failed.\n")
+        _print_crawl_errors(client, job_id)
         sys.exit(1)
     if result.status == "cancelled":
         sys.stderr.write("Crawl was cancelled\n")
