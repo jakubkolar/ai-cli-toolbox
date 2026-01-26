@@ -21,7 +21,6 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
 from firecrawl.types import CrawlJob, Document, ScrapeOptions
-from tqdm import tqdm
 
 
 def _get_client() -> Firecrawl:
@@ -248,8 +247,7 @@ def main_map() -> None:
 
     if args.json:
         json_output = [
-            {"url": link.url, "title": link.title or "", "description": link.description or ""}
-            for link in links
+            {"url": link.url, "title": link.title or "", "description": link.description or ""} for link in links
         ]
         print(json.dumps(json_output, indent=2))
     else:
@@ -287,9 +285,7 @@ def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -
     return "saved"
 
 
-def _save_all_pages(
-    pages: list[Document], output_dir: Path, *, skip_existing: bool
-) -> tuple[int, int]:
+def _save_all_pages(pages: list[Document], output_dir: Path, *, skip_existing: bool) -> tuple[int, int]:
     """Save all crawled pages to files.
 
     :return: Tuple of (saved_count, skipped_count)
@@ -306,20 +302,23 @@ def _save_all_pages(
 
 
 def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int) -> CrawlJob:
-    """Poll crawl status with tqdm progress until complete/failed/cancelled."""
-    with tqdm(total=limit, desc="Crawling", unit="page") as pbar:
-        while True:
-            status = client.get_crawl_status(job_id)
+    """Poll crawl status until complete/failed/cancelled, printing progress to stderr."""
+    last_scraped = 0
+    while True:
+        status = client.get_crawl_status(job_id)
 
-            # Update progress bar
-            pbar.total = status.total or limit
-            pbar.n = status.completed
-            pbar.refresh()
+        # Track progress via scraped page count
+        scraped = len(status.data or [])
+        total = status.total or limit
 
-            if status.status in {"completed", "failed", "cancelled"}:
-                return status
+        if scraped != last_scraped:
+            sys.stderr.write(f"Crawling: {scraped}/{total} pages scraped\n")
+            last_scraped = scraped
 
-            time.sleep(CRAWL_POLL_INTERVAL)
+        if status.status in {"completed", "failed", "cancelled"}:
+            return status
+
+        time.sleep(CRAWL_POLL_INTERVAL)
 
 
 def main_crawl() -> None:
