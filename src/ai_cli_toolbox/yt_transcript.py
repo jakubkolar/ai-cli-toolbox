@@ -94,13 +94,29 @@ def _slugify_title(title: str, url: str, max_length: int = 100) -> str:
     return f"{slug}_{url_hash}.md"
 
 
+class _SilentLogger:
+    """Logger that suppresses all yt-dlp output."""
+
+    def debug(self, msg: str) -> None:
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        pass
+
+    def error(self, msg: str) -> None:
+        pass
+
+
 def _fetch_metadata(url: str) -> MetadataResult | None:
     """Fetch video metadata using yt-dlp.
 
     :param url: YouTube video URL.
     :return: MetadataResult with title, description, upload_date, url. None on error.
     """
-    ydl_opts = {"quiet": True, "no_warnings": True}
+    ydl_opts = {"quiet": True, "no_warnings": True, "logger": _SilentLogger()}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
