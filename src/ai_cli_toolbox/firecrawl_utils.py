@@ -167,6 +167,148 @@ def main_scrape() -> None:
 
 
 # =============================================================================
+# Entry Point: firecrawl-batch-scrape
+# =============================================================================
+
+
+def _truncate_url(url: str, max_len: int = 50) -> str:
+    """Truncate URL for progress display.
+
+    :param url: URL to truncate.
+    :param max_len: Maximum length (default 50).
+    :return: Truncated URL with ellipsis if needed.
+    """
+    if len(url) <= max_len:
+        return url
+    return url[: max_len - 3] + "..."
+
+
+def _deduplicate_urls(urls: list[str]) -> list[str]:
+    """Remove duplicate URLs while preserving order.
+
+    :param urls: List of URLs possibly containing duplicates.
+    :return: List of unique URLs in original order.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def _collect_urls_from_args_or_stdin(args_urls: list[str]) -> list[str]:
+    """Collect URLs from command args or stdin fallback.
+
+    :param args_urls: URLs provided as positional arguments.
+    :return: Deduplicated list of URLs.
+    """
+    urls = args_urls
+    if not urls and not sys.stdin.isatty():
+        stdin_content = sys.stdin.read()
+        urls = stdin_content.split()
+    return _deduplicate_urls(urls)
+
+
+def _scrape_single_url(client: Firecrawl, url: str, file_path: Path, *, full_page: bool) -> tuple[bool, str | None]:
+    """Scrape a single URL and save to file.
+
+    :param client: Firecrawl client.
+    :param url: URL to scrape.
+    :param file_path: Path to save the scraped content.
+    :param full_page: Whether to include full page content.
+    :return: Tuple of (success, error_message).
+    """
+    try:
+        result = client.scrape(url, formats=["markdown"], only_main_content=not full_page)
+        title = result.metadata.title if result.metadata else "Untitled"
+        source_url = result.metadata.source_url if result.metadata else url
+        content = result.markdown or ""
+        output = _format_markdown_output(content, title, source_url)
+        file_path.write_text(output, encoding="utf-8")
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def _print_batch_summary(saved: int, skipped: int, failed: list[str], credits_used: int) -> None:
+    """Print batch scrape summary to stderr.
+
+    :param saved: Number of successfully saved files.
+    :param skipped: Number of skipped files.
+    :param failed: List of failed URLs.
+    :param credits_used: Total credits used.
+    """
+    sys.stderr.write(f"\nSaved: {saved}, Skipped: {skipped}, Failed: {len(failed)}\n")
+    if failed:
+        sys.stderr.write("Failed URLs:\n")
+        for url in failed:
+            sys.stderr.write(f"  - {url}\n")
+    _print_credits(credits_used)
+
+
+def main_batch_scrape() -> None:
+    """Entry point for firecrawl-batch-scrape command.
+
+    Scrapes multiple URLs and saves each to individual files.
+    """
+    parser = argparse.ArgumentParser(
+        prog="firecrawl-batch-scrape",
+        description="Scrape multiple URLs and save each to individual files",
+    )
+    parser.add_argument("urls", nargs="*", help="URLs to scrape")
+    parser.add_argument(
+        "--output-dir", "-o", default=".", help="Output directory for scraped files (default: current directory)"
+    )
+    parser.add_argument(
+        "--full-page", action="store_true", help="Include navigation/footer (default: main content only)"
+    )
+    parser.add_argument("--force", action="store_true", help="Overwrite existing output files")
+
+    args = parser.parse_args()
+    urls = _collect_urls_from_args_or_stdin(args.urls)
+
+    if not urls:
+        sys.stderr.write("No URLs to process\n")
+        sys.exit(0)
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    client = _get_client()
+
+    saved, skipped, failed, credits_used = 0, 0, [], 0
+
+    try:
+        for i, url in enumerate(urls, 1):
+            sys.stderr.write(f"Scraping {i}/{len(urls)}: {_truncate_url(url)}\n")
+            file_path = output_dir / _slugify_url(url)
+
+            if file_path.exists() and not args.force:
+                sys.stderr.write(f"  Skipped (exists): {file_path.name}\n")
+                skipped += 1
+                continue
+
+            success, error = _scrape_single_url(client, url, file_path, full_page=args.full_page)
+            if success:
+                saved += 1
+                credits_used += 1
+            else:
+                sys.stderr.write(f"  Error: {error}\n")
+                failed.append(url)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+
+    _print_batch_summary(saved, skipped, failed, credits_used)
+
+    # Exit code: 0 = success, 1 = total failure, 2 = partial
+    if saved == 0 and failed:
+        sys.exit(1)
+    if failed:
+        sys.exit(2)
+
+
+# =============================================================================
 # Entry Point: firecrawl-search
 # =============================================================================
 
@@ -340,7 +482,7 @@ def main_crawl() -> None:
         description="Crawl multiple pages and save to files",
     )
     parser.add_argument("url", help="Starting URL")
-    parser.add_argument("--output", "-o", required=True, help="Output directory")
+    parser.add_argument("--output-dir", "-o", required=True, help="Output directory for scraped files")
     parser.add_argument("--limit", type=int, default=50, help="Maximum pages to crawl (default: 50)")
     parser.add_argument("--max-depth", type=int, help="Maximum discovery depth")
     parser.add_argument("--include-path", action="append", help="Only crawl paths matching pattern (can repeat)")
@@ -355,7 +497,7 @@ def main_crawl() -> None:
     parser.add_argument("--skip-existing", action="store_true", help="Skip pages whose output file already exists")
 
     args = parser.parse_args()
-    output_dir = Path(args.output)
+    output_dir = Path(args.output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     client = _get_client()

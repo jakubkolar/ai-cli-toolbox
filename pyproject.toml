@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 firecrawl-scrape = "ai_cli_toolbox.firecrawl_utils:main_scrape"
+firecrawl-batch-scrape = "ai_cli_toolbox.firecrawl_utils:main_batch_scrape"
 firecrawl-search = "ai_cli_toolbox.firecrawl_utils:main_search"
 firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
 firecrawl-crawl = "ai_cli_toolbox.firecrawl_utils:main_crawl"
