@@ -10,6 +10,8 @@ requires-python = ">=3.13"
 dependencies = [
     "firecrawl-py",
     "python-dotenv",
+    "yt-dlp",
+    "youtube-transcript-api",
 ]
 
 [project.scripts]
@@ -17,6 +19,7 @@ firecrawl-scrape = "ai_cli_toolbox.firecrawl_utils:main_scrape"
 firecrawl-search = "ai_cli_toolbox.firecrawl_utils:main_search"
 firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
 firecrawl-crawl = "ai_cli_toolbox.firecrawl_utils:main_crawl"
+yt-transcript = "ai_cli_toolbox.yt_transcript:main"
 
 [dependency-groups]
 dev = [
@@ -106,6 +109,7 @@ convention = "pep257"
     "TC001",
     "PLR0914",
     "PLR0904",
+    "PLC2701",  # Allow importing private names in tests
 ]
 "src/ai_cli_toolbox/*_utils.py" = [
     "T201",  # print statements are the primary output mechanism for CLI tools
