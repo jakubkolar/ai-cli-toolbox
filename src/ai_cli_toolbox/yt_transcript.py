@@ -23,6 +23,7 @@ class MetadataResult:
     """Video metadata extracted from YouTube."""
 
     title: str
+    channel: str
     description: str
     upload_date: str
     url: str
@@ -110,6 +111,7 @@ def _fetch_metadata(url: str) -> MetadataResult | None:
                 return None
 
             title = info_dict.get("title", "Untitled")
+            channel = info_dict.get("channel", "")
             description = info_dict.get("description", "")
             upload_date_raw = info_dict.get("upload_date", "")
 
@@ -120,6 +122,7 @@ def _fetch_metadata(url: str) -> MetadataResult | None:
 
             return MetadataResult(
                 title=title,
+                channel=channel,
                 description=description,
                 upload_date=upload_date,
                 url=url,
@@ -164,8 +167,9 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
     """
     retrieved_at = datetime.now(UTC).isoformat()
 
-    # Escape quotes in title for YAML
+    # Escape quotes in title and channel for YAML
     title_escaped = metadata.title.replace('"', '\\"')
+    channel_escaped = metadata.channel.replace('"', '\\"')
 
     # Format description with proper YAML multi-line syntax
     description_lines = metadata.description.split("\n")
@@ -177,6 +181,7 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
     frontmatter = f'''---
 title: "{title_escaped}"
 url: "{metadata.url}"
+channel: "{channel_escaped}"
 description: {description_yaml}
 upload_date: "{metadata.upload_date}"
 retrieved_at: "{retrieved_at}"

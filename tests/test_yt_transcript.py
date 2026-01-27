@@ -137,6 +137,7 @@ class TestFormatOutput:
         # Given
         metadata = MetadataResult(
             title="Test Video",
+            channel="Test Channel",
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
@@ -149,6 +150,7 @@ class TestFormatOutput:
         # Then
         assert 'title: "Test Video"' in output
         assert 'url: "https://www.youtube.com/watch?v=test123"' in output
+        assert 'channel: "Test Channel"' in output
         assert 'upload_date: "2026-01-15"' in output
         assert "retrieved_at:" in output
         assert "Hello, this is the transcript." in output
@@ -158,6 +160,7 @@ class TestFormatOutput:
         # Given
         metadata = MetadataResult(
             title="Test Video",
+            channel="Test Channel",
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
@@ -174,6 +177,7 @@ class TestFormatOutput:
         # Given
         metadata = MetadataResult(
             title='He said "Hello"',
+            channel="Test Channel",
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
@@ -190,6 +194,7 @@ class TestFormatOutput:
         # Given
         metadata = MetadataResult(
             title="Test Video",
+            channel="Test Channel",
             description="Line 1\nLine 2\nLine 3",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
@@ -204,3 +209,20 @@ class TestFormatOutput:
         assert "  Line 1\n" in output
         assert "  Line 2\n" in output
         assert "  Line 3\n" in output
+
+    def test_format_escapes_quotes_in_channel(self):
+        # Given
+        metadata = MetadataResult(
+            title="Test Video",
+            channel='Channel with "Quotes"',
+            description="Test description",
+            upload_date="2026-01-15",
+            url="https://www.youtube.com/watch?v=test123",
+        )
+        transcript = "Content"
+
+        # When
+        output = _format_output(metadata, transcript)
+
+        # Then
+        assert 'channel: "Channel with \\"Quotes\\""' in output
