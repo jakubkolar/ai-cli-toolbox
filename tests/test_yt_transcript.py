@@ -3,6 +3,7 @@
 from ai_cli_toolbox.yt_transcript import (
     MetadataResult,
     _extract_video_id,
+    _format_duration,
     _format_output,
     _slugify_title,
 )
@@ -78,6 +79,23 @@ class TestExtractVideoId:
 
         # Then
         assert video_id is None
+
+
+class TestFormatDuration:
+    def test_seconds_only(self):
+        assert _format_duration(45) == "45 sec"
+
+    def test_minutes_and_seconds(self):
+        assert _format_duration(310) == "5 min 10 sec"
+
+    def test_exactly_one_minute(self):
+        assert _format_duration(60) == "1 min 0 sec"
+
+    def test_hrs_minutes_seconds(self):
+        assert _format_duration(3665) == "1 hr 1 min 5 sec"
+
+    def test_multiple_hrs(self):
+        assert _format_duration(7384) == "2 hr 3 min 4 sec"
 
 
 class TestSlugifyTitle:
@@ -272,7 +290,7 @@ class TestFormatOutput:
         output = _format_output(metadata, transcript)
 
         # Then
-        assert "duration: 3600" in output
+        assert 'duration: "1 hr 0 min 0 sec"' in output
         assert "view_count: 1000000" in output
         assert "like_count: 50000" in output
         assert "comment_count: 2000" in output
@@ -286,7 +304,7 @@ class TestFormatOutput:
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
-            duration=3600,
+            duration=310,
             view_count=None,
             like_count=50000,
             comment_count=None,
@@ -298,7 +316,7 @@ class TestFormatOutput:
         output = _format_output(metadata, transcript)
 
         # Then
-        assert "duration: 3600" in output
+        assert 'duration: "5 min 10 sec"' in output
         assert "like_count: 50000" in output
         assert "view_count:" not in output
         assert "comment_count:" not in output

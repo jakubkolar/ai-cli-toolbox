@@ -99,6 +99,23 @@ def _slugify_title(title: str, url: str, max_length: int = 100) -> str:
     return f"{slug}_{url_hash}.md"
 
 
+def _format_duration(seconds: int) -> str:
+    """Format duration in seconds to human-readable string.
+
+    :param seconds: Duration in seconds.
+    :return: Human-readable duration (e.g., "1 hour 5 min 10 sec").
+    """
+    if seconds < 60:
+        return f"{seconds} sec"
+
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes} min {secs} sec"
+
+    hours, mins = divmod(minutes, 60)
+    return f"{hours} hr {mins} min {secs} sec"
+
+
 def _fetch_metadata(url: str) -> MetadataResult | None:
     """Fetch video metadata using yt-dlp.
 
@@ -196,7 +213,7 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
     # Build optional numeric fields
     optional_fields = ""
     if metadata.duration is not None:
-        optional_fields += f"duration: {metadata.duration}\n"
+        optional_fields += f'duration: "{_format_duration(metadata.duration)}"\n'
     if metadata.view_count is not None:
         optional_fields += f"view_count: {metadata.view_count}\n"
     if metadata.like_count is not None:
