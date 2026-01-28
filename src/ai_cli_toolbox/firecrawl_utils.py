@@ -124,16 +124,66 @@ def main_scrape() -> None:
     """
     parser = argparse.ArgumentParser(
         prog="firecrawl-scrape",
-        description="Scrape a URL and output clean markdown",
+        description="Scrape a single URL and output clean markdown with YAML frontmatter.",
+        epilog="""
+OUTPUT FORMAT:
+  Markdown with YAML frontmatter:
+    ---
+    title: "Page Title"
+    url: "https://example.com/page"
+    scraped_at: "2026-01-25T14:30:00Z"
+    ---
+
+    # Page content here...
+
+  Output goes to stdout by default, or to file with --output.
+
+FILE CONFLICT:
+  If --output file exists: skip API call (save credits), exit 0
+  Use --force to re-scrape and overwrite existing file
+
+COST:
+  1 credit per scrape
+
+ENVIRONMENT:
+  FIRECRAWL_API_KEY  Required. Load from .env file or environment.
+
+EXAMPLES:
+  # Scrape to stdout
+  firecrawl-scrape https://example.com/docs/api
+
+  # Scrape to file
+  firecrawl-scrape https://example.com/docs/api -o api_docs.md
+
+  # Include full page (navigation, footer)
+  firecrawl-scrape --full-page https://example.com -o full.md
+
+  # Force re-scrape existing file
+  firecrawl-scrape --force -o existing.md https://example.com
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="URL to scrape")
-    parser.add_argument("--output", "-o", help="Output file path (default: stdout)")
+    parser.add_argument(
+        "url",
+        metavar="URL",
+        help="URL to scrape",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        metavar="FILE",
+        help="output file path (default: stdout)",
+    )
     parser.add_argument(
         "--full-page",
         action="store_true",
-        help="Include navigation/footer (default: main content only)",
+        help="include navigation/footer (default: main content only)",
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing output file")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing output file (default: skip if exists)",
+    )
 
     args = parser.parse_args()
 
@@ -255,16 +305,83 @@ def main_batch_scrape() -> None:
     """
     parser = argparse.ArgumentParser(
         prog="firecrawl-batch-scrape",
-        description="Scrape multiple URLs and save each to individual files",
+        description="Scrape multiple URLs and save each to individual markdown files.",
+        epilog="""
+INPUT:
+  URLs can be provided via:
+  1. Positional arguments: firecrawl-batch-scrape url1 url2 url3
+  2. Stdin (when no args and stdin is piped): cat urls.txt | firecrawl-batch-scrape
+
+  URLs split on any whitespace (spaces, tabs, newlines).
+  Duplicate URLs are removed before processing.
+
+OUTPUT FORMAT:
+  Each file contains markdown with YAML frontmatter:
+    ---
+    title: "Page Title"
+    url: "https://example.com/page"
+    scraped_at: "2026-01-25T14:30:00Z"
+    ---
+
+    # Page content...
+
+FILENAME GENERATION:
+  URL path slugified with hash suffix: path_segment_HASH.md
+  Example: https://docs.example.com/api/auth -> api_auth_a1b2c3.md
+
+FILE CONFLICT:
+  Default: skip files that exist (save credits)
+  Use --force to re-scrape and overwrite
+
+EXIT CODES:
+  0  All URLs scraped successfully (or no URLs to process)
+  1  Complete failure (auth error, no URLs processed)
+  2  Partial success (some URLs failed, some succeeded)
+
+COST:
+  1 credit per URL scraped (skipped files cost nothing)
+
+ENVIRONMENT:
+  FIRECRAWL_API_KEY  Required. Load from .env file or environment.
+
+EXAMPLES:
+  # Scrape multiple URLs to current directory
+  firecrawl-batch-scrape https://example.com/page1 https://example.com/page2
+
+  # Scrape to specific directory
+  firecrawl-batch-scrape -o ./scraped/ url1 url2 url3
+
+  # Pipe from firecrawl-map output
+  firecrawl-map https://docs.example.com | firecrawl-batch-scrape -o ./docs/
+
+  # Force re-scrape existing files
+  firecrawl-batch-scrape --force -o ./docs/ url1 url2
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("urls", nargs="*", help="URLs to scrape")
     parser.add_argument(
-        "--output-dir", "-o", default=".", help="Output directory for scraped files (default: current directory)"
+        "urls",
+        nargs="*",
+        metavar="URL",
+        help="URLs to scrape (or pipe via stdin)",
     )
     parser.add_argument(
-        "--full-page", action="store_true", help="Include navigation/footer (default: main content only)"
+        "--output-dir",
+        "-o",
+        default=".",
+        metavar="DIR",
+        help="output directory for scraped files (default: current directory)",
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing output files")
+    parser.add_argument(
+        "--full-page",
+        action="store_true",
+        help="include navigation/footer (default: main content only)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing files (default: skip if exists)",
+    )
 
     args = parser.parse_args()
     urls = _collect_urls_from_args_or_stdin(args.urls)
@@ -320,11 +437,64 @@ def main_search() -> None:
     """
     parser = argparse.ArgumentParser(
         prog="firecrawl-search",
-        description="Search the web and return result metadata",
+        description="Search the web and return result metadata (titles, URLs, descriptions).",
+        epilog="""
+OUTPUT FORMAT:
+  Plain text (default):
+    ## Result Title
+    URL: https://example.com/page
+    Description of the search result...
+
+    ---
+
+    ## Another Result
+    URL: https://example.com/other
+    Another description...
+
+  JSON (with --json):
+    [
+      {
+        "title": "Result Title",
+        "url": "https://example.com/page",
+        "description": "Description of the search result..."
+      }
+    ]
+
+COST:
+  2 credits per 10 results
+
+ENVIRONMENT:
+  FIRECRAWL_API_KEY  Required. Load from .env file or environment.
+
+EXAMPLES:
+  # Basic search
+  firecrawl-search "python web scraping tutorial"
+
+  # Limit results
+  firecrawl-search --limit 5 "react hooks best practices"
+
+  # JSON output for programmatic use
+  firecrawl-search --json "API documentation examples"
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("query", help="Search query")
-    parser.add_argument("--limit", type=int, default=10, help="Number of results (default: 10)")
-    parser.add_argument("--json", action="store_true", help="Output as JSON array")
+    parser.add_argument(
+        "query",
+        metavar="QUERY",
+        help="search query string",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        metavar="N",
+        help="number of results to return (default: 10)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output as JSON array instead of plain text",
+    )
 
     args = parser.parse_args()
 
@@ -366,12 +536,72 @@ def main_map() -> None:
     """
     parser = argparse.ArgumentParser(
         prog="firecrawl-map",
-        description="Discover URLs on a website",
+        description="Discover all URLs on a website. Useful for planning which pages to scrape.",
+        epilog="""
+OUTPUT FORMAT:
+  Plain text (default): one URL per line
+    https://example.com/
+    https://example.com/docs/
+    https://example.com/docs/getting-started/
+    https://example.com/api/
+
+  JSON (with --json):
+    [
+      {"url": "https://example.com/", "title": "Home", "description": "..."},
+      {"url": "https://example.com/docs/", "title": "Documentation", "description": "..."}
+    ]
+
+WORKFLOW:
+  Map first, then selectively scrape:
+    firecrawl-map https://docs.example.com > urls.txt
+    # Review urls.txt, keep only needed URLs
+    cat urls.txt | firecrawl-batch-scrape -o ./docs/
+
+COST:
+  1 credit per map operation
+
+ENVIRONMENT:
+  FIRECRAWL_API_KEY  Required. Load from .env file or environment.
+
+EXAMPLES:
+  # Discover all URLs on a site
+  firecrawl-map https://docs.example.com
+
+  # Limit number of URLs
+  firecrawl-map --limit 100 https://docs.example.com
+
+  # Filter URLs containing "api"
+  firecrawl-map --search api https://docs.example.com
+
+  # JSON output for programmatic use
+  firecrawl-map --json https://docs.example.com
+
+  # Pipe directly to batch-scrape
+  firecrawl-map https://docs.example.com | firecrawl-batch-scrape -o ./docs/
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="Starting URL")
-    parser.add_argument("--limit", type=int, help="Maximum URLs to return")
-    parser.add_argument("--json", action="store_true", help="Output as JSON array")
-    parser.add_argument("--search", help="Filter URLs containing this string")
+    parser.add_argument(
+        "url",
+        metavar="URL",
+        help="starting URL to map from",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="maximum URLs to return (default: API default)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output as JSON array instead of plain text",
+    )
+    parser.add_argument(
+        "--search",
+        metavar="PATTERN",
+        help="filter URLs containing this string",
+    )
 
     args = parser.parse_args()
 
@@ -479,22 +709,122 @@ def main_crawl() -> None:
     """Entry point for firecrawl-crawl command."""
     parser = argparse.ArgumentParser(
         prog="firecrawl-crawl",
-        description="Crawl multiple pages and save to files",
+        description="Crawl multiple pages from a website and save each to a markdown file.",
+        epilog="""
+OUTPUT FORMAT:
+  Each page saved as markdown with YAML frontmatter:
+    ---
+    title: "Page Title"
+    url: "https://example.com/page"
+    scraped_at: "2026-01-25T14:30:00Z"
+    ---
+
+    # Page content...
+
+FILENAME GENERATION:
+  URL path slugified with hash suffix: path_segment_HASH.md
+  Example: https://docs.example.com/api/auth -> api_auth_a1b2c3.md
+
+FILE CONFLICT:
+  Default: overwrite existing files
+  Use --skip-existing to skip (save credits on re-runs)
+
+PATH FILTERS:
+  --include-path and --exclude-path accept glob patterns:
+    --include-path "/docs/*"     Only crawl /docs/ pages
+    --include-path "/api/*"      Can repeat for multiple patterns
+    --exclude-path "/blog/*"     Skip blog pages
+
+SITEMAP OPTIONS:
+  include  Use sitemap + discovered links (default)
+  skip     Ignore sitemap, discover links only
+  only     Use sitemap only, no link discovery
+
+EXIT CODES:
+  0  Crawl completed successfully
+  1  Crawl failed or was cancelled
+
+COST:
+  1 credit per page crawled
+
+ENVIRONMENT:
+  FIRECRAWL_API_KEY  Required. Load from .env file or environment.
+
+EXAMPLES:
+  # Crawl documentation site (max 50 pages)
+  firecrawl-crawl https://docs.example.com -o ./docs/
+
+  # Crawl with limit
+  firecrawl-crawl --limit 100 https://docs.example.com -o ./docs/
+
+  # Crawl only API docs
+  firecrawl-crawl --include-path "/api/*" https://docs.example.com -o ./api/
+
+  # Exclude blog, include everything else
+  firecrawl-crawl --exclude-path "/blog/*" https://example.com -o ./site/
+
+  # Include subdomains
+  firecrawl-crawl --allow-subdomains https://example.com -o ./all/
+
+  # Skip already-downloaded pages on re-run
+  firecrawl-crawl --skip-existing https://docs.example.com -o ./docs/
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="Starting URL")
-    parser.add_argument("--output-dir", "-o", required=True, help="Output directory for scraped files")
-    parser.add_argument("--limit", type=int, default=50, help="Maximum pages to crawl (default: 50)")
-    parser.add_argument("--max-depth", type=int, help="Maximum discovery depth")
-    parser.add_argument("--include-path", action="append", help="Only crawl paths matching pattern (can repeat)")
-    parser.add_argument("--exclude-path", action="append", help="Skip paths matching pattern (can repeat)")
-    parser.add_argument("--allow-subdomains", action="store_true", help="Include subdomain pages")
+    parser.add_argument(
+        "url",
+        metavar="URL",
+        help="starting URL to crawl from",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        required=True,
+        metavar="DIR",
+        help="output directory for scraped files (required)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="maximum pages to crawl (default: 50)",
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        metavar="N",
+        help="maximum link discovery depth (default: unlimited)",
+    )
+    parser.add_argument(
+        "--include-path",
+        action="append",
+        metavar="PATTERN",
+        help="only crawl paths matching pattern (can repeat)",
+    )
+    parser.add_argument(
+        "--exclude-path",
+        action="append",
+        metavar="PATTERN",
+        help="skip paths matching pattern (can repeat)",
+    )
+    parser.add_argument(
+        "--allow-subdomains",
+        action="store_true",
+        help="include pages from subdomains",
+    )
     parser.add_argument(
         "--sitemap",
         choices=["include", "skip", "only"],
         default="include",
-        help="How to use sitemap (default: include)",
+        metavar="MODE",
+        help="sitemap usage: include, skip, only (default: include)",
     )
-    parser.add_argument("--skip-existing", action="store_true", help="Skip pages whose output file already exists")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="skip pages whose output file already exists (save credits)",
+    )
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)

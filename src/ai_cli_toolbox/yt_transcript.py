@@ -310,24 +310,67 @@ def main() -> None:
     """Entry point for yt-transcript command."""
     parser = argparse.ArgumentParser(
         prog="yt-transcript",
-        description="Download YouTube video transcripts as markdown files",
+        description="Download YouTube video transcripts as markdown files with YAML frontmatter.",
+        epilog="""
+OUTPUT FORMAT:
+  Markdown file with YAML frontmatter containing metadata:
+    ---
+    title: "Video Title"
+    url: "https://www.youtube.com/watch?v=VIDEO_ID"
+    channel: "Channel Name"
+    duration: "1 hr 5 min 10 sec"      # optional, human-readable
+    view_count: 1500000                 # optional
+    like_count: 50000                   # optional
+    comment_count: 2000                 # optional
+    channel_follower_count: 100000      # optional
+    description: |
+      Full video description...
+    upload_date: "2026-01-15"
+    retrieved_at: "2026-01-27T14:30:00Z"
+    ---
+
+    Transcript text preserving original line breaks...
+
+  If transcript is unavailable, creates partial file with warning block.
+
+FILENAME GENERATION:
+  Auto-generated from video title: slugified_title_HASH.md
+  Example: Rick_Astley_Never_Gonna_Give_You_Up_a1b2c3.md
+
+EXIT CODES:
+  0  All videos processed successfully
+  1  One or more videos failed (partial or complete failure)
+
+EXAMPLES:
+  # Single video to current directory
+  yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+  # Multiple videos to specific directory
+  yt-transcript -o ~/transcripts/ URL1 URL2 URL3
+
+  # Force re-download of existing files
+  yt-transcript --force -o ./transcripts/ "https://youtu.be/VIDEO_ID"
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "urls",
         nargs="+",
-        help="YouTube video URLs to process",
+        metavar="URL",
+        help="YouTube video URLs (supports: youtube.com/watch?v=ID, youtu.be/ID, youtube.com/embed/ID)",
     )
     parser.add_argument(
         "--output-dir",
         "-o",
         type=Path,
         default=Path(),
-        help="Output directory for transcript files (default: current directory)",
+        metavar="DIR",
+        help="output directory for transcript files (default: current directory)",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing files",
+        help="overwrite existing files (default: skip if file exists)",
     )
 
     args = parser.parse_args()
