@@ -27,6 +27,11 @@ class MetadataResult:
     description: str
     upload_date: str
     url: str
+    duration: int | None
+    view_count: int | None
+    like_count: int | None
+    comment_count: int | None
+    channel_follower_count: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +136,11 @@ def _fetch_metadata(url: str) -> MetadataResult | None:
                 description=description,
                 upload_date=upload_date,
                 url=url,
+                duration=info_dict.get("duration"),
+                view_count=info_dict.get("view_count"),
+                like_count=info_dict.get("like_count"),
+                comment_count=info_dict.get("comment_count"),
+                channel_follower_count=info_dict.get("channel_follower_count"),
             )
     except yt_dlp.utils.DownloadError as e:
         sys.stderr.write(f"Error fetching metadata: {e}\n")
@@ -183,11 +193,24 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
     else:
         description_yaml = f'"{metadata.description}"'
 
+    # Build optional numeric fields
+    optional_fields = ""
+    if metadata.duration is not None:
+        optional_fields += f"duration: {metadata.duration}\n"
+    if metadata.view_count is not None:
+        optional_fields += f"view_count: {metadata.view_count}\n"
+    if metadata.like_count is not None:
+        optional_fields += f"like_count: {metadata.like_count}\n"
+    if metadata.comment_count is not None:
+        optional_fields += f"comment_count: {metadata.comment_count}\n"
+    if metadata.channel_follower_count is not None:
+        optional_fields += f"channel_follower_count: {metadata.channel_follower_count}\n"
+
     frontmatter = f'''---
 title: "{title_escaped}"
 url: "{metadata.url}"
 channel: "{channel_escaped}"
-description: {description_yaml}
+{optional_fields}description: {description_yaml}
 upload_date: "{metadata.upload_date}"
 retrieved_at: "{retrieved_at}"
 ---

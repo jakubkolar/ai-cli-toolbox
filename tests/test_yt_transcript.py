@@ -141,6 +141,11 @@ class TestFormatOutput:
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
+            duration=None,
+            view_count=None,
+            like_count=None,
+            comment_count=None,
+            channel_follower_count=None,
         )
         transcript = "Hello, this is the transcript."
 
@@ -164,6 +169,11 @@ class TestFormatOutput:
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
+            duration=None,
+            view_count=None,
+            like_count=None,
+            comment_count=None,
+            channel_follower_count=None,
         )
         transcript = None
 
@@ -181,6 +191,11 @@ class TestFormatOutput:
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
+            duration=None,
+            view_count=None,
+            like_count=None,
+            comment_count=None,
+            channel_follower_count=None,
         )
         transcript = "Content"
 
@@ -198,6 +213,11 @@ class TestFormatOutput:
             description="Line 1\nLine 2\nLine 3",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
+            duration=None,
+            view_count=None,
+            like_count=None,
+            comment_count=None,
+            channel_follower_count=None,
         )
         transcript = "Content"
 
@@ -218,6 +238,11 @@ class TestFormatOutput:
             description="Test description",
             upload_date="2026-01-15",
             url="https://www.youtube.com/watch?v=test123",
+            duration=None,
+            view_count=None,
+            like_count=None,
+            comment_count=None,
+            channel_follower_count=None,
         )
         transcript = "Content"
 
@@ -226,3 +251,55 @@ class TestFormatOutput:
 
         # Then
         assert 'channel: "Channel with \\"Quotes\\""' in output
+
+    def test_format_includes_optional_numeric_fields(self):
+        # Given
+        metadata = MetadataResult(
+            title="Test Video",
+            channel="Test Channel",
+            description="Test description",
+            upload_date="2026-01-15",
+            url="https://www.youtube.com/watch?v=test123",
+            duration=3600,
+            view_count=1000000,
+            like_count=50000,
+            comment_count=2000,
+            channel_follower_count=100000,
+        )
+        transcript = "Content"
+
+        # When
+        output = _format_output(metadata, transcript)
+
+        # Then
+        assert "duration: 3600" in output
+        assert "view_count: 1000000" in output
+        assert "like_count: 50000" in output
+        assert "comment_count: 2000" in output
+        assert "channel_follower_count: 100000" in output
+
+    def test_format_omits_none_numeric_fields(self):
+        # Given
+        metadata = MetadataResult(
+            title="Test Video",
+            channel="Test Channel",
+            description="Test description",
+            upload_date="2026-01-15",
+            url="https://www.youtube.com/watch?v=test123",
+            duration=3600,
+            view_count=None,
+            like_count=50000,
+            comment_count=None,
+            channel_follower_count=None,
+        )
+        transcript = "Content"
+
+        # When
+        output = _format_output(metadata, transcript)
+
+        # Then
+        assert "duration: 3600" in output
+        assert "like_count: 50000" in output
+        assert "view_count:" not in output
+        assert "comment_count:" not in output
+        assert "channel_follower_count:" not in output
