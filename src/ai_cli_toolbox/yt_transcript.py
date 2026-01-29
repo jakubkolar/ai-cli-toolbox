@@ -339,7 +339,8 @@ FILENAME GENERATION:
 
 EXIT CODES:
   0  All videos processed successfully
-  1  One or more videos failed (partial or complete failure)
+  1  Complete failure (all videos failed)
+  2  Partial failure (some videos succeeded, some failed)
 
 EXAMPLES:
   # Single video to current directory
@@ -398,7 +399,7 @@ EXAMPLES:
         for result in results:
             if not result.success and result.error:
                 sys.stderr.write(f"  - {result.error}\n")
-        sys.exit(1)
+        sys.exit(1 if successes == 0 else 2)
 
 
 if __name__ == "__main__":
