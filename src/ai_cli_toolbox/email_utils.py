@@ -120,7 +120,7 @@ def _gmail_raw_uids(mb: MailBox, query: str) -> list[str]:
     """
     # Use IMAP literal to transmit non-ASCII query bytes
     query_bytes = query.encode("utf-8")
-    mb.client.literal = query_bytes  # type: ignore[assignment]
+    mb.client.literal = query_bytes  # type: ignore[assignment]  # imaplib accepts bytes at runtime, stubs type it as str
     result = mb.client.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
     if result[0] != "OK":
         msg = f"Gmail search failed: {result[1]}"
@@ -188,7 +188,7 @@ def _build_criteria(args: argparse.Namespace) -> str | AND:
         kwargs["seen"] = False
 
     if kwargs:
-        return AND(**kwargs)  # type: ignore[arg-type]
+        return AND(**kwargs)  # type: ignore[arg-type]  # kwargs values are str|bool|date, AND accepts these at runtime
     return "ALL"
 
 
@@ -811,16 +811,16 @@ EXAMPLES:
             operations: list[str] = []
 
             if args.seen:
-                mb.flag(args.uids, MailMessageFlags.SEEN, True)  # noqa: FBT003
+                mb.flag(args.uids, MailMessageFlags.SEEN, True)  # noqa: FBT003  # imap-tools API requires bool positional
                 operations.append(f"+{MailMessageFlags.SEEN}")
             if args.unseen:
-                mb.flag(args.uids, MailMessageFlags.SEEN, False)  # noqa: FBT003
+                mb.flag(args.uids, MailMessageFlags.SEEN, False)  # noqa: FBT003  # imap-tools API requires bool positional
                 operations.append(f"-{MailMessageFlags.SEEN}")
             if args.star:
-                mb.flag(args.uids, MailMessageFlags.FLAGGED, True)  # noqa: FBT003
+                mb.flag(args.uids, MailMessageFlags.FLAGGED, True)  # noqa: FBT003  # imap-tools API requires bool positional
                 operations.append(f"+{MailMessageFlags.FLAGGED}")
             if args.unstar:
-                mb.flag(args.uids, MailMessageFlags.FLAGGED, False)  # noqa: FBT003
+                mb.flag(args.uids, MailMessageFlags.FLAGGED, False)  # noqa: FBT003  # imap-tools API requires bool positional
                 operations.append(f"-{MailMessageFlags.FLAGGED}")
 
             sys.stderr.write(f"Flagged {len(args.uids)} message(s): {' '.join(operations)}\n")
