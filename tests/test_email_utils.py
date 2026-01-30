@@ -14,10 +14,16 @@ from ai_cli_toolbox.email_utils import (
     _build_criteria,
     _email_block_to_dict,
     _find_special_folder,
+    _format_attachment_list,
+    _format_body,
     _format_email_block,
+    _format_email_full,
     _parse_date,
+    main_flag,
     main_folders,
     main_list,
+    main_move,
+    main_read,
 )
 
 # =============================================================================
@@ -362,3 +368,242 @@ class TestMainList:
         captured = capsys.readouterr()
         assert "UID: 1" in captured.out
         assert "UID: 2" not in captured.out
+
+
+# =============================================================================
+# Changeset B: _format_body, _format_email_full, _format_attachment_list
+# =============================================================================
+
+
+def _make_full_message(**kwargs: object) -> MagicMock:
+    msg = _make_message(**kwargs)
+    msg.from_values = MagicMock()
+    msg.from_values.full = "Sender <sender@example.com>"
+    msg.to_values = [MagicMock(full="Recipient <recipient@example.com>")]
+    msg.cc_values = []
+    msg.html = ""
+    return msg
+
+
+class TestFormatBody:
+    def test_returns_text_when_available(self):
+        # Given
+        msg = MagicMock()
+        msg.text = "Plain text body"
+        msg.html = "<p>HTML body</p>"
+
+        # When
+        result = _format_body(msg)
+
+        # Then
+        assert result == "Plain text body"
+
+    def test_converts_html_when_no_text(self):
+        # Given
+        msg = MagicMock()
+        msg.text = ""
+        msg.html = "<p>HTML body</p>"
+
+        # When
+        result = _format_body(msg)
+
+        # Then
+        assert "HTML body" in result
+
+    def test_returns_empty_when_no_content(self):
+        # Given
+        msg = MagicMock()
+        msg.text = ""
+        msg.html = ""
+
+        # When
+        result = _format_body(msg)
+
+        # Then
+        assert not result
+
+
+class TestFormatEmailFull:
+    def test_basic_markdown_output(self):
+        # Given
+        msg = _make_full_message(uid="12345", subject="Test Email", text="Hello world")
+
+        # When
+        result = _format_email_full(msg)
+
+        # Then
+        assert "uid: 12345" in result
+        assert 'subject: "Test Email"' in result
+        assert "Hello world" in result
+        assert "---" in result
+
+    def test_includes_cc_when_present(self):
+        # Given
+        msg = _make_full_message()
+        msg.cc_values = [MagicMock(full="cc@example.com")]
+
+        # When
+        result = _format_email_full(msg)
+
+        # Then
+        assert 'cc: "cc@example.com"' in result
+
+    def test_includes_attachment_list(self):
+        # Given
+        att = MagicMock()
+        att.filename = "doc.pdf"
+        att.size = 10240
+        att.content_type = "application/pdf"
+        msg = _make_full_message(attachments=[att])
+
+        # When
+        result = _format_email_full(msg)
+
+        # Then
+        assert "## Attachments" in result
+        assert "doc.pdf" in result
+
+
+class TestFormatAttachmentList:
+    def test_formats_attachment_metadata(self):
+        # Given
+        att = MagicMock()
+        att.filename = "report.pdf"
+        att.size = 2048
+        att.content_type = "application/pdf"
+
+        # When
+        result = _format_attachment_list([att])
+
+        # Then
+        assert "## Attachments" in result
+        assert "- report.pdf (2 KB, application/pdf)" in result
+
+    def test_small_attachment_shows_bytes(self):
+        # Given
+        att = MagicMock()
+        att.filename = "tiny.txt"
+        att.size = 500
+        att.content_type = "text/plain"
+
+        # When
+        result = _format_attachment_list([att])
+
+        # Then
+        assert "- tiny.txt (500 B, text/plain)" in result
+
+
+# =============================================================================
+# main_read
+# =============================================================================
+
+
+class TestMainRead:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_read_text_output(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        msg = _make_full_message(uid="555", subject="Test Read")
+        mock_mb.fetch.return_value = [msg]
+
+        # When
+        with patch("sys.argv", ["email-read", "555"]):
+            main_read()
+
+        # Then
+        captured = capsys.readouterr()
+        assert "uid: 555" in captured.out
+        assert 'subject: "Test Read"' in captured.out
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_read_not_found_exits(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = []
+
+        # When / Then
+        with patch("sys.argv", ["email-read", "999"]), pytest.raises(SystemExit):
+            main_read()
+
+
+# =============================================================================
+# main_flag
+# =============================================================================
+
+
+class TestMainFlag:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_flag_seen(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+
+        # When
+        with patch("sys.argv", ["email-flag", "123", "--seen"]):
+            main_flag()
+
+        # Then
+        mock_mb.flag.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Flagged 1 message(s)" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_flag_seen_and_star(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+
+        # When
+        with patch("sys.argv", ["email-flag", "123", "--seen", "--star"]):
+            main_flag()
+
+        # Then
+        assert mock_mb.flag.call_count == 2
+        captured = capsys.readouterr()
+        assert "+\\Seen" in captured.err
+        assert "+\\Flagged" in captured.err
+
+
+# =============================================================================
+# main_move
+# =============================================================================
+
+
+class TestMainMove:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_move_single_uid(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+
+        # When
+        with patch("sys.argv", ["email-move", "123", "[Gmail]/Trash"]):
+            main_move()
+
+        # Then
+        mock_mb.move.assert_called_once_with(["123"], "[Gmail]/Trash")
+        captured = capsys.readouterr()
+        assert "Moved 1 message(s) to [Gmail]/Trash" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_move_multiple_uids(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+
+        # When
+        with patch("sys.argv", ["email-move", "1", "2", "3", "Archive"]):
+            main_move()
+
+        # Then
+        mock_mb.move.assert_called_once_with(["1", "2", "3"], "Archive")
+        captured = capsys.readouterr()
+        assert "Moved 3 message(s) to Archive" in captured.err

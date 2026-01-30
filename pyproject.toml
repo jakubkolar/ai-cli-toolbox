@@ -24,6 +24,9 @@ firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
 firecrawl-crawl = "ai_cli_toolbox.firecrawl_utils:main_crawl"
 yt-transcript = "ai_cli_toolbox.yt_transcript:main"
 email-list = "ai_cli_toolbox.email_utils:main_list"
+email-read = "ai_cli_toolbox.email_utils:main_read"
+email-move = "ai_cli_toolbox.email_utils:main_move"
+email-flag = "ai_cli_toolbox.email_utils:main_flag"
 email-folders = "ai_cli_toolbox.email_utils:main_folders"
 
 [dependency-groups]

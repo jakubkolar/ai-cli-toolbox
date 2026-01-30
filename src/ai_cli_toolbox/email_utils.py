@@ -14,12 +14,14 @@ import datetime
 import json
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import html2text
 from dotenv import load_dotenv
-from imap_tools import AND, MailBox
+from imap_tools import AND, MailBox, MailMessageFlags
 from imap_tools.errors import UnexpectedCommandStatusError
-from imap_tools.message import MailMessage
+from imap_tools.message import MailAttachment, MailMessage
 
 if TYPE_CHECKING:
     from imap_tools.folder import FolderInfo
@@ -339,6 +341,327 @@ EXAMPLES:
             else:
                 for m in messages:
                     print(_format_email_block(m, args.preview))
+    except UnexpectedCommandStatusError as e:
+        sys.stderr.write(f"IMAP error: {e}\n")
+        sys.exit(1)
+    except (OSError, ConnectionRefusedError) as e:
+        sys.stderr.write(f"Connection error: {e}\n")
+        sys.exit(1)
+
+
+# =============================================================================
+# Changeset B helpers
+# =============================================================================
+
+
+def _format_body(msg: MailMessage) -> str:
+    """Return plain text body, converting HTML if needed."""
+    if msg.text:
+        return msg.text
+
+    if msg.html:
+        converter = html2text.HTML2Text()
+        converter.body_width = 0
+        converter.ignore_images = True
+        converter.ignore_links = False
+        return converter.handle(msg.html)
+
+    return ""
+
+
+def _format_email_full(msg: MailMessage) -> str:
+    """Format email as YAML frontmatter + body for ``email-read`` markdown output."""
+    date_str = msg.date.isoformat() if msg.date.year > 1900 else "Unknown"
+    from_val = msg.from_values.full if msg.from_values else msg.from_
+    to_val = ", ".join(addr.full for addr in msg.to_values) if msg.to_values else ""
+    cc_val = ", ".join(addr.full for addr in msg.cc_values) if msg.cc_values else ""
+    flags_str = ", ".join(msg.flags) if msg.flags else ""
+
+    frontmatter_lines = [
+        "---",
+        f"uid: {msg.uid}",
+        f'from: "{from_val}"',
+        f'to: "{to_val}"',
+    ]
+    if cc_val:
+        frontmatter_lines.append(f'cc: "{cc_val}"')
+    frontmatter_lines.extend(
+        [
+            f'date: "{date_str}"',
+            f'subject: "{msg.subject}"',
+            f"flags: [{flags_str}]",
+            "---",
+        ]
+    )
+
+    body = _format_body(msg)
+    parts = ["\n".join(frontmatter_lines), "", body]
+
+    if msg.attachments:
+        parts.extend(["", _format_attachment_list(msg.attachments)])
+
+    return "\n".join(parts)
+
+
+def _format_attachment_list(attachments: list[MailAttachment]) -> str:
+    """Format attachment metadata as a markdown list."""
+    lines = ["## Attachments", ""]
+    for att in attachments:
+        size_kb = att.size / 1024
+        size_str = f"{size_kb:.0f} KB" if size_kb >= 1 else f"{att.size} B"
+        lines.append(f"- {att.filename} ({size_str}, {att.content_type})")
+    return "\n".join(lines)
+
+
+def _save_attachments(attachments: list[MailAttachment], directory: str) -> int:
+    """Save attachments to a directory, handling filename conflicts."""
+    dir_path = Path(directory)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    for att in attachments:
+        filename = att.filename or f"attachment_{saved}"
+        target = dir_path / filename
+        counter = 1
+        while target.exists():
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            target = dir_path / f"{stem}_{counter}{suffix}"
+            counter += 1
+        target.write_bytes(att.payload)
+        saved += 1
+    return saved
+
+
+# =============================================================================
+# Entry Point: email-read
+# =============================================================================
+
+
+def main_read() -> None:
+    """Entry point for email-read command.
+
+    Fetch full email content by UID.
+    """
+    parser = argparse.ArgumentParser(
+        prog="email-read",
+        description="Fetch full email content by UID.",
+        epilog="""\
+OUTPUT FORMAT:
+  Markdown with YAML frontmatter (default):
+    ---
+    uid: 12345
+    from: "John Doe <john@example.com>"
+    to: "user@gmail.com"
+    date: "2026-01-29T08:30:00"
+    subject: "Invoice Q1"
+    flags: [\\Seen, \\Flagged]
+    ---
+
+    Email body text here...
+
+    ## Attachments
+
+    - invoice.pdf (245 KB, application/pdf)
+
+  Raw (with --raw): RFC822 message bytes to stdout.
+
+ENVIRONMENT:
+  IMAP_HOST      Required. IMAP server hostname.
+  IMAP_USER      Required. IMAP username / email address.
+  IMAP_PASSWORD  Required. IMAP password or app password.
+  IMAP_PORT      Optional. IMAP port (default: 993).
+
+EXAMPLES:
+  # Read email by UID
+  email-read 12345
+
+  # Mark as read and save attachments
+  email-read 12345 --mark-seen --save-attachments ./downloads/
+
+  # Save to file
+  email-read 12345 --output email.md
+
+  # Raw RFC822 output
+  email-read 12345 --raw
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("uid", help="email UID to fetch")
+    parser.add_argument("--folder", default="INBOX", help="folder containing the email (default: INBOX)")
+    parser.add_argument("--mark-seen", action="store_true", help="mark email as read when fetching")
+    parser.add_argument("--save-attachments", metavar="DIR", help="directory to save attachments to")
+    parser.add_argument("--output", metavar="FILE", help="output file path (default: stdout)")
+    parser.add_argument("--raw", action="store_true", help="output raw RFC822 message")
+
+    args = parser.parse_args()
+
+    try:
+        mb = _get_mailbox()
+        with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            messages = list(mb.fetch(AND(uid=args.uid), mark_seen=args.mark_seen))
+            if not messages:
+                sys.stderr.write(f"No message found with UID {args.uid} in {args.folder}\n")
+                sys.exit(1)
+
+            msg = messages[0]
+
+            if args.raw:
+                sys.stdout.buffer.write(msg.obj.as_bytes())
+                return
+
+            output = _format_email_full(msg)
+
+            if args.save_attachments and msg.attachments:
+                saved = _save_attachments(msg.attachments, args.save_attachments)
+                sys.stderr.write(f"Saved {saved} attachment(s) to {args.save_attachments}/\n")
+
+            if args.output:
+                Path(args.output).write_text(output, encoding="utf-8")
+                sys.stderr.write(f"Saved to: {args.output}\n")
+            else:
+                print(output)
+    except UnexpectedCommandStatusError as e:
+        sys.stderr.write(f"IMAP error: {e}\n")
+        sys.exit(1)
+    except (OSError, ConnectionRefusedError) as e:
+        sys.stderr.write(f"Connection error: {e}\n")
+        sys.exit(1)
+
+
+# =============================================================================
+# Entry Point: email-flag
+# =============================================================================
+
+
+def main_flag() -> None:
+    """Entry point for email-flag command.
+
+    Mark emails as read/unread, starred/unstarred.
+    """
+    parser = argparse.ArgumentParser(
+        prog="email-flag",
+        description="Mark emails as read/unread, starred/unstarred.",
+        epilog="""\
+BEHAVIOR:
+  Flags are independent: --seen --star sets both.
+  --seen and --unseen are mutually exclusive.
+  --star and --unstar are mutually exclusive.
+
+ENVIRONMENT:
+  IMAP_HOST      Required. IMAP server hostname.
+  IMAP_USER      Required. IMAP username / email address.
+  IMAP_PASSWORD  Required. IMAP password or app password.
+  IMAP_PORT      Optional. IMAP port (default: 993).
+
+EXAMPLES:
+  # Mark as read
+  email-flag 12345 --seen
+
+  # Star multiple emails
+  email-flag 12345 12346 12347 --star
+
+  # Mark as unread and remove star
+  email-flag 12345 --unseen --unstar
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("uids", nargs="+", help="one or more UIDs to flag")
+    parser.add_argument("--folder", default="INBOX", help="folder containing the emails (default: INBOX)")
+    parser.add_argument("--seen", action="store_true", help="mark as read")
+    parser.add_argument("--unseen", action="store_true", help="mark as unread")
+    parser.add_argument("--star", action="store_true", help="star/flag the email")
+    parser.add_argument("--unstar", action="store_true", help="remove star/flag")
+
+    args = parser.parse_args()
+
+    if args.seen and args.unseen:
+        parser.error("--seen and --unseen are mutually exclusive")
+    if args.star and args.unstar:
+        parser.error("--star and --unstar are mutually exclusive")
+    if not any((args.seen, args.unseen, args.star, args.unstar)):
+        parser.error("at least one flag operation required (--seen/--unseen/--star/--unstar)")
+
+    try:
+        mb = _get_mailbox()
+        with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            operations: list[str] = []
+
+            if args.seen:
+                mb.flag(args.uids, MailMessageFlags.SEEN, True)  # noqa: FBT003
+                operations.append(f"+{MailMessageFlags.SEEN}")
+            if args.unseen:
+                mb.flag(args.uids, MailMessageFlags.SEEN, False)  # noqa: FBT003
+                operations.append(f"-{MailMessageFlags.SEEN}")
+            if args.star:
+                mb.flag(args.uids, MailMessageFlags.FLAGGED, True)  # noqa: FBT003
+                operations.append(f"+{MailMessageFlags.FLAGGED}")
+            if args.unstar:
+                mb.flag(args.uids, MailMessageFlags.FLAGGED, False)  # noqa: FBT003
+                operations.append(f"-{MailMessageFlags.FLAGGED}")
+
+            sys.stderr.write(f"Flagged {len(args.uids)} message(s): {' '.join(operations)}\n")
+    except UnexpectedCommandStatusError as e:
+        sys.stderr.write(f"IMAP error: {e}\n")
+        sys.exit(1)
+    except (OSError, ConnectionRefusedError) as e:
+        sys.stderr.write(f"Connection error: {e}\n")
+        sys.exit(1)
+
+
+# =============================================================================
+# Entry Point: email-move
+# =============================================================================
+
+
+def main_move() -> None:
+    """Entry point for email-move command.
+
+    Move emails to a folder.
+    """
+    parser = argparse.ArgumentParser(
+        prog="email-move",
+        description="Move emails to a folder.",
+        epilog="""\
+BEHAVIOR:
+  Batch operation: accepts multiple UIDs.
+  Uses IMAP MOVE command (or COPY + DELETE fallback).
+  NEVER permanently deletes. Moving to trash is the only "delete" operation.
+
+ENVIRONMENT:
+  IMAP_HOST      Required. IMAP server hostname.
+  IMAP_USER      Required. IMAP username / email address.
+  IMAP_PASSWORD  Required. IMAP password or app password.
+  IMAP_PORT      Optional. IMAP port (default: 993).
+
+EXAMPLES:
+  # Move to a folder
+  email-move 12345 "Work/Archive"
+
+  # Move multiple emails to trash
+  email-move 12345 12346 "[Gmail]/Trash"
+
+  # Move from a specific source folder
+  email-move 12345 "[Gmail]/Trash" --folder "Work"
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("uids", nargs="+", help="one or more UIDs to move, followed by target folder")
+    parser.add_argument("--folder", default="INBOX", help="source folder (default: INBOX)")
+
+    args = parser.parse_args()
+
+    if len(args.uids) < 2:
+        parser.error("requires at least one UID and a target folder")
+
+    # Last positional arg is the target folder, rest are UIDs
+    target = args.uids[-1]
+    uid_list = args.uids[:-1]
+
+    try:
+        mb = _get_mailbox()
+        with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            mb.move(uid_list, target)
+            sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
