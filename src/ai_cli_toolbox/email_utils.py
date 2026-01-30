@@ -74,6 +74,81 @@ def _find_special_folder(mb: MailBox, attribute: str) -> str:
     return "INBOX"
 
 
+def _is_gmail() -> bool:
+    """Check if the IMAP host is a Gmail server."""
+    host = os.environ.get("IMAP_HOST", "")
+    return "gmail" in host.lower() or "googlemail" in host.lower()
+
+
+def _criteria_has_non_ascii(criteria: str | AND) -> bool:
+    """Check if search criteria contain non-ASCII characters."""
+    return not str(criteria).isascii()
+
+
+def _build_gmail_raw_query(args: argparse.Namespace) -> str:
+    """Build a Gmail X-GM-RAW search query string from CLI filter args.
+
+    Maps CLI flags to Gmail search operators.
+    See https://support.google.com/mail/answer/7190
+
+    :param args: Parsed argparse namespace with filter flags.
+    :return: Gmail search query string.
+    """
+    parts: list[str] = []
+    if args.from_filter:
+        parts.append(f"from:{args.from_filter}")
+    if args.subject:
+        parts.append(f"subject:{args.subject}")
+    if args.body:
+        # Gmail uses bare text for body search
+        parts.append(args.body)
+    if args.since:
+        parts.append(f"after:{args.since.isoformat()}")
+    if args.before:
+        parts.append(f"before:{args.before.isoformat()}")
+    if args.unseen:
+        parts.append("is:unread")
+    return " ".join(parts)
+
+
+def _gmail_raw_uids(mb: MailBox, query: str) -> list[str]:
+    """Search Gmail using X-GM-RAW extension and return matching UIDs.
+
+    :param mb: Connected and logged-in MailBox.
+    :param query: Gmail search query string.
+    :return: List of matching UIDs.
+    """
+    # Use IMAP literal to transmit non-ASCII query bytes
+    query_bytes = query.encode("utf-8")
+    mb.client.literal = query_bytes  # type: ignore[assignment]
+    result = mb.client.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
+    if result[0] != "OK":
+        msg = f"Gmail search failed: {result[1]}"
+        raise Exception(msg)
+    return result[1][0].decode().split() if result[1][0] else []
+
+
+def _fetch_via_gmail_raw(mb: MailBox, args: argparse.Namespace) -> tuple[list[MailMessage], str]:
+    """Fetch messages using Gmail X-GM-RAW search for non-ASCII criteria.
+
+    :param mb: Connected and logged-in MailBox.
+    :param args: Parsed argparse namespace with filter flags.
+    :return: Tuple of (messages, total_str for display).
+    """
+    gmail_query = _build_gmail_raw_query(args)
+    all_uids = _gmail_raw_uids(mb, gmail_query)
+    total_str = f" of {len(all_uids)}" if args.count else ""
+    # Apply limit (most recent = highest UIDs)
+    limited_uids = list(reversed(all_uids))[: args.limit] if args.limit else list(reversed(all_uids))
+    uid_criteria = ",".join(limited_uids) if limited_uids else None
+    if uid_criteria:
+        messages = list(mb.fetch(f"UID {uid_criteria}", mark_seen=False))
+        messages.sort(key=lambda m: int(m.uid), reverse=True)
+    else:
+        messages = []
+    return messages, total_str
+
+
 def _parse_date(value: str) -> datetime.date:
     """Parse a date string (YYYY-MM-DD) to ``datetime.date``.
 
@@ -460,13 +535,24 @@ EXAMPLES:
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             criteria = _build_criteria(args)
+            use_gmail_raw = _criteria_has_non_ascii(criteria)
 
-            total_str = ""
-            if args.count:
-                all_uids = mb.uids(criteria)
-                total_str = f" of {len(all_uids)}"
+            if use_gmail_raw and not _is_gmail():
+                sys.stderr.write(
+                    "Error: Non-ASCII search terms require Gmail (X-GM-RAW). "
+                    "Standard IMAP does not support UTF-8 search on most servers.\n"
+                )
+                sys.exit(1)
 
-            messages = list(mb.fetch(criteria, limit=args.limit, mark_seen=False, reverse=True))
+            if use_gmail_raw:
+                messages, total_str = _fetch_via_gmail_raw(mb, args)
+            else:
+                total_str = ""
+                if args.count:
+                    all_uids = mb.uids(criteria)
+                    total_str = f" of {len(all_uids)}"
+
+                messages = list(mb.fetch(criteria, limit=args.limit, mark_seen=False, reverse=True))
 
             if args.has_attachment:
                 messages = [m for m in messages if len(m.attachments) > 0]
