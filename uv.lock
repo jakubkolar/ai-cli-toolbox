@@ -7,6 +7,8 @@ name = "ai-cli-toolbox"
 source = { editable = "." }
 dependencies = [
     { name = "firecrawl-py" },
+    { name = "html2text" },
+    { name = "imap-tools" },
     { name = "python-dotenv" },
     { name = "youtube-transcript-api" },
     { name = "yt-dlp" },
@@ -23,6 +25,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "firecrawl-py" },
+    { name = "html2text" },
+    { name = "imap-tools" },
     { name = "python-dotenv" },
     { name = "youtube-transcript-api" },
     { name = "yt-dlp" },
@@ -324,6 +328,15 @@ wheels = [
 ]
 
 [[package]]
+name = "html2text"
+version = "2025.4.15"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/27/e158d86ba1e82967cc2f790b0cb02030d4a8bef58e0c79a8590e9678107f/html2text-2025.4.15.tar.gz", hash = "sha256:948a645f8f0bc3abe7fd587019a2197a12436cd73d0d4908af95bfc8da337588", size = 64316, upload-time = "2025-04-15T04:02:30.045Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/84/1a0f9555fd5f2b1c924ff932d99b40a0f8a6b12f6dd625e2a47f415b00ea/html2text-2025.4.15-py3-none-any.whl", hash = "sha256:00569167ffdab3d7767a4cdf589b7f57e777a5ed28d12907d8c58769ec734acc", size = 34656, upload-time = "2025-04-15T04:02:28.44Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -358,6 +371,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6f/6d/0703ccc57f3a7233505399edb88de3cbd678da106337b9fcde432b65ed60/idna-3.11.tar.gz", hash = "sha256:795dafcc9c04ed0c1fb032c2aa73654d8e8c5023a7df64a53f39190ada629902", size = 194582, upload-time = "2025-10-12T14:55:20.501Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/61/66938bbb5fc52dbdf84594873d5b51fb1f7c7794e9c0f5bd885f30bc507b/idna-3.11-py3-none-any.whl", hash = "sha256:771a87f49d9defaf64091e6e6fe9c18d4833f140bd19464795bc32d966ca37ea", size = 71008, upload-time = "2025-10-12T14:55:18.883Z" },
+]
+
+[[package]]
+name = "imap-tools"
+version = "1.11.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/eb/de91770dc8f34691c33355f7b6277500db32f68ce039c08e2a40ad5a0536/imap_tools-1.11.1.tar.gz", hash = "sha256:e3aa02ff3415a2b50a47707eacbf7386bb79aabc34e370c6bb95f9ad20504389", size = 46562, upload-time = "2026-01-15T08:25:47.357Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/bb/94eca066102559a20953475779a4d4d6b39712985014bceba726e1f65aab/imap_tools-1.11.1-py3-none-any.whl", hash = "sha256:0749d0a1f2b9041be1533ea98cc3e9f7977ba86ad3669c1fcf89c27969dcfb0a", size = 35291, upload-time = "2026-01-15T08:25:42.773Z" },
 ]
 
 [[package]]
