@@ -919,10 +919,12 @@ def _set_threading_headers(msg: email.message.EmailMessage, original: MailMessag
     :param msg: Draft message being composed.
     :param original: Original message being replied to.
     """
-    original_message_id = original.headers.get("message-id", [""])[0]
+    raw_id = original.headers.get("message-id", [""])[0]
+    original_message_id = " ".join(raw_id.split())
     if original_message_id:
         msg["In-Reply-To"] = original_message_id
-        original_refs = original.headers.get("references", [""])[0]
+        raw_refs = original.headers.get("references", [""])[0]
+        original_refs = " ".join(raw_refs.split())
         msg["References"] = f"{original_refs} {original_message_id}".strip()
 
 
