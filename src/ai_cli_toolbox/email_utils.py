@@ -209,7 +209,11 @@ EXAMPLES:
             folders: list[FolderInfo] = mb.folder.list()
             folder_data: list[dict[str, object]] = []
             for f in folders:
-                status = mb.folder.status(f.name, ("MESSAGES", "UNSEEN"))
+                try:
+                    status = mb.folder.status(f.name, ("MESSAGES", "UNSEEN"))
+                except UnexpectedCommandStatusError:
+                    # Virtual container folders (e.g. [Gmail]) don't support STATUS
+                    continue
                 folder_data.append(
                     {
                         "name": f.name,
@@ -898,6 +902,16 @@ EXAMPLES:
 
   # Reply with CC override
   email-draft --reply-all-to-uid 12345 --cc extra@example.com --body "Adding CC"
+
+SHELL QUOTING:
+  zsh escapes ! in double quotes (history expansion). Use $'...' quoting
+  for --body to avoid this and to support newlines via \\n:
+
+    email-draft --reply-to-uid 123 --body $'Hi!\\n\\nThanks.\\n\\nRegards,\\nClaude'
+
+  Alternatively, pipe the body via stdin:
+
+    echo 'Message body here!' | email-draft --reply-to-uid 123
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
