@@ -11,8 +11,11 @@ Six CLI commands for AI-agent-friendly email operations:
 
 import argparse
 import datetime
+import email.message
+import email.utils
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -662,6 +665,282 @@ EXAMPLES:
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             mb.move(uid_list, target)
             sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
+    except UnexpectedCommandStatusError as e:
+        sys.stderr.write(f"IMAP error: {e}\n")
+        sys.exit(1)
+    except (OSError, ConnectionRefusedError) as e:
+        sys.stderr.write(f"Connection error: {e}\n")
+        sys.exit(1)
+
+
+# =============================================================================
+# Changeset C helpers
+# =============================================================================
+
+_LOCALE_FORMATS: dict[str, str] = {
+    "en": "{month} {day}, {year} at {hour}:{minute}",
+    "cs": "{day}. {month_num}. {year} v {hour}:{minute}",
+}
+
+_EN_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _format_date_locale(dt: datetime.datetime, locale: str) -> str:
+    """Format datetime per locale for reply attribution line.
+
+    :param dt: Datetime to format.
+    :param locale: Locale code (en, cs, or fallback to ISO).
+    :return: Formatted date string.
+    """
+    fmt = _LOCALE_FORMATS.get(locale)
+    if fmt is None:
+        return dt.strftime("%Y-%m-%d %H:%M")
+
+    return fmt.format(
+        day=dt.day,
+        month=_EN_MONTHS[dt.month - 1],
+        month_num=dt.month,
+        year=dt.year,
+        hour=dt.hour,
+        minute=f"{dt.minute:02d}",
+    )
+
+
+def _build_reply_body(original: MailMessage, user_body: str, locale: str) -> str:
+    """Construct reply body with attribution line and quoted original.
+
+    :param original: Original message being replied to.
+    :param user_body: User's reply text.
+    :param locale: Locale for date formatting.
+    :return: Full reply body text.
+    """
+    original_body = _format_body(original)
+    quoted = "\n".join(f"> {line}" for line in original_body.splitlines())
+
+    date_str = _format_date_locale(original.date, locale)
+    sender = original.from_
+
+    attribution = f"{date_str}, {sender}:"
+
+    parts = [user_body, "", attribution, quoted]
+    return "\n".join(parts)
+
+
+def _read_body_input(args: argparse.Namespace) -> str:
+    """Return body from args or stdin."""
+    if args.body:
+        return args.body
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return ""
+
+
+def _collect_reply_all_cc(original: MailMessage, user: str, explicit_cc: str | None) -> str | None:
+    """Build CC header for reply-all, excluding self.
+
+    :param original: Original message.
+    :param user: Current user's email address.
+    :param explicit_cc: Explicit CC override from args.
+    :return: CC header value or None.
+    """
+    user_lower = user.lower()
+    recipients = [addr.full for addr in original.to_values if addr.email.lower() != user_lower]
+    recipients.extend(addr.full for addr in original.cc_values if addr.email.lower() != user_lower)
+    if explicit_cc:
+        recipients.extend(addr.strip() for addr in explicit_cc.split(","))
+    return ", ".join(recipients) if recipients else None
+
+
+def _build_reply_subject(original_subject: str, override: str | None) -> str:
+    """Build reply subject line, avoiding ``Re: Re:`` duplication.
+
+    :param original_subject: Original message subject.
+    :param override: Explicit subject override from args.
+    :return: Subject string for reply.
+    """
+    if override:
+        return override
+    if re.match(r"^re:\s*", original_subject, re.IGNORECASE):
+        return original_subject
+    return f"Re: {original_subject}"
+
+
+def _set_threading_headers(msg: email.message.EmailMessage, original: MailMessage) -> None:
+    """Set In-Reply-To and References headers for threading.
+
+    :param msg: Draft message being composed.
+    :param original: Original message being replied to.
+    """
+    original_message_id = original.headers.get("message-id", [""])[0]
+    if original_message_id:
+        msg["In-Reply-To"] = original_message_id
+        original_refs = original.headers.get("references", [""])[0]
+        msg["References"] = f"{original_refs} {original_message_id}".strip()
+
+
+def _compose_reply(
+    mb: MailBox,
+    args: argparse.Namespace,
+    user: str,
+    user_body: str,
+    *,
+    is_reply_all: bool,
+) -> email.message.EmailMessage:
+    """Compose a reply draft message.
+
+    :param mb: Connected and logged-in MailBox.
+    :param args: Parsed CLI args.
+    :param user: Current user's email.
+    :param user_body: User's reply text.
+    :param is_reply_all: Whether this is a reply-all.
+    :return: Composed EmailMessage.
+    """
+    reply_uid = args.reply_all_to_uid or args.reply_to_uid
+    originals = list(mb.fetch(AND(uid=reply_uid), mark_seen=False))
+    if not originals:
+        sys.stderr.write(f"No message found with UID {reply_uid} in {args.folder}\n")
+        sys.exit(1)
+    original = originals[0]
+
+    msg = email.message.EmailMessage()
+    msg["To"] = args.to_addr or original.from_
+
+    if is_reply_all:
+        cc_val = _collect_reply_all_cc(original, user, args.cc)
+        if cc_val:
+            msg["Cc"] = cc_val
+    elif args.cc:
+        msg["Cc"] = args.cc
+
+    msg["Subject"] = _build_reply_subject(original.subject or "", args.subject)
+    _set_threading_headers(msg, original)
+
+    body_text = _build_reply_body(original, user_body, args.locale)
+    msg["From"] = user
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg.set_content(body_text)
+    return msg
+
+
+def _compose_new_draft(args: argparse.Namespace, user: str, user_body: str) -> email.message.EmailMessage:
+    """Compose a new (non-reply) draft message.
+
+    :param args: Parsed CLI args.
+    :param user: Current user's email.
+    :param user_body: Email body text.
+    :return: Composed EmailMessage.
+    """
+    msg = email.message.EmailMessage()
+    msg["To"] = args.to_addr
+    if args.cc:
+        msg["Cc"] = args.cc
+    msg["Subject"] = args.subject
+    msg["From"] = user
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg.set_content(user_body)
+    return msg
+
+
+# =============================================================================
+# Entry Point: email-draft
+# =============================================================================
+
+
+def main_draft() -> None:
+    """Entry point for email-draft command.
+
+    Create a draft email (with reply support).
+    """
+    parser = argparse.ArgumentParser(
+        prog="email-draft",
+        description="Create a draft email (with reply support).",
+        epilog="""\
+REPLY BEHAVIOR:
+  --reply-all-to-uid: Reply-all (To = sender, CC = original To/CC minus self)
+  --reply-to-uid: Reply to sender only
+  Both set Subject, In-Reply-To, References headers automatically.
+
+  Attribution line format: "{date}, {sender}:" followed by quoted original.
+
+DRAFT CREATION:
+  Plain text only. Created via IMAP APPEND to Drafts folder.
+  User reviews and sends manually from email client.
+
+ENVIRONMENT:
+  IMAP_HOST      Required. IMAP server hostname.
+  IMAP_USER      Required. IMAP username / email address.
+  IMAP_PASSWORD  Required. IMAP password or app password.
+  IMAP_PORT      Optional. IMAP port (default: 993).
+  IMAP_LOCALE    Optional. Locale for date formatting (default: en).
+
+EXAMPLES:
+  # Create a new draft
+  email-draft --to user@example.com --subject "Hello" --body "Hi there"
+
+  # Reply to an email
+  email-draft --reply-to-uid 12345 --body "Thanks for the info"
+
+  # Reply-all with body from stdin
+  echo "Sounds good" | email-draft --reply-all-to-uid 12345
+
+  # Reply with CC override
+  email-draft --reply-all-to-uid 12345 --cc extra@example.com --body "Adding CC"
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--to", dest="to_addr", help="recipient address(es), comma-separated")
+    parser.add_argument("--cc", help="CC recipient(s), comma-separated")
+    parser.add_argument("--subject", help="email subject")
+    parser.add_argument("--body", help="email body (plain text; reads stdin if omitted)")
+    parser.add_argument("--reply-all-to-uid", metavar="UID", help="UID of email to reply-all to")
+    parser.add_argument("--reply-to-uid", metavar="UID", help="UID of email to reply to sender only")
+    parser.add_argument("--folder", default="INBOX", help="folder of original email for replies (default: INBOX)")
+    parser.add_argument(
+        "--locale",
+        default=os.environ.get("IMAP_LOCALE", "en"),
+        help="locale for date formatting in reply attribution (default: en)",
+    )
+
+    args = parser.parse_args()
+
+    if args.reply_all_to_uid and args.reply_to_uid:
+        parser.error("--reply-all-to-uid and --reply-to-uid are mutually exclusive")
+
+    reply_uid = args.reply_all_to_uid or args.reply_to_uid
+
+    if not reply_uid:
+        if not args.to_addr:
+            parser.error("--to is required for new drafts (not replying)")
+        if not args.subject:
+            parser.error("--subject is required for new drafts (not replying)")
+
+    user_body = _read_body_input(args)
+
+    try:
+        mb = _get_mailbox()
+        user = os.environ["IMAP_USER"]
+        with mb.login(user, os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            if reply_uid:
+                msg = _compose_reply(mb, args, user, user_body, is_reply_all=bool(args.reply_all_to_uid))
+            else:
+                msg = _compose_new_draft(args, user, user_body)
+
+            drafts_folder = _find_special_folder(mb, "\\Drafts")
+            mb.append(msg.as_bytes(), drafts_folder, dt=datetime.datetime.now(tz=datetime.UTC))
+            sys.stderr.write(f"Draft created in {drafts_folder}\n")
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)

@@ -27,6 +27,7 @@ email-list = "ai_cli_toolbox.email_utils:main_list"
 email-read = "ai_cli_toolbox.email_utils:main_read"
 email-move = "ai_cli_toolbox.email_utils:main_move"
 email-flag = "ai_cli_toolbox.email_utils:main_flag"
+email-draft = "ai_cli_toolbox.email_utils:main_draft"
 email-folders = "ai_cli_toolbox.email_utils:main_folders"
 
 [dependency-groups]

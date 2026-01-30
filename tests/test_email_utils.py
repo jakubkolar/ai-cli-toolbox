@@ -12,13 +12,16 @@ from imap_tools.folder import FolderInfo
 
 from ai_cli_toolbox.email_utils import (
     _build_criteria,
+    _build_reply_body,
     _email_block_to_dict,
     _find_special_folder,
     _format_attachment_list,
     _format_body,
+    _format_date_locale,
     _format_email_block,
     _format_email_full,
     _parse_date,
+    main_draft,
     main_flag,
     main_folders,
     main_list,
@@ -607,3 +610,173 @@ class TestMainMove:
         mock_mb.move.assert_called_once_with(["1", "2", "3"], "Archive")
         captured = capsys.readouterr()
         assert "Moved 3 message(s) to Archive" in captured.err
+
+
+# =============================================================================
+# Changeset C: _format_date_locale, _build_reply_body, main_draft
+# =============================================================================
+
+
+class TestFormatDateLocale:
+    def test_english_locale(self):
+        # Given
+        dt = datetime.datetime(2026, 1, 29, 8, 28, tzinfo=datetime.UTC)
+
+        # When
+        result = _format_date_locale(dt, "en")
+
+        # Then
+        assert result == "Jan 29, 2026 at 8:28"
+
+    def test_czech_locale(self):
+        # Given
+        dt = datetime.datetime(2026, 1, 29, 8, 28, tzinfo=datetime.UTC)
+
+        # When
+        result = _format_date_locale(dt, "cs")
+
+        # Then
+        assert result == "29. 1. 2026 v 8:28"
+
+    def test_unknown_locale_falls_back_to_iso(self):
+        # Given
+        dt = datetime.datetime(2026, 1, 29, 8, 28, tzinfo=datetime.UTC)
+
+        # When
+        result = _format_date_locale(dt, "fr")
+
+        # Then
+        assert result == "2026-01-29 08:28"
+
+
+class TestBuildReplyBody:
+    def test_builds_reply_with_attribution_and_quoted_body(self):
+        # Given
+        original = MagicMock()
+        original.text = "Hello, how are you?"
+        original.html = ""
+        original.date = datetime.datetime(2026, 1, 29, 8, 28, tzinfo=datetime.UTC)
+        original.from_ = "john@example.com"
+
+        # When
+        result = _build_reply_body(original, "I'm fine, thanks!", "en")
+
+        # Then
+        assert "I'm fine, thanks!" in result
+        assert "Jan 29, 2026 at 8:28, john@example.com:" in result
+        assert "> Hello, how are you?" in result
+
+    def test_re_prefix_dedup(self):
+        # Given: subject already has Re: (tested in main_draft, but verifying concept)
+        original = MagicMock()
+        original.text = "Test"
+        original.html = ""
+        original.date = datetime.datetime(2026, 1, 29, 8, 0, tzinfo=datetime.UTC)
+        original.from_ = "a@b.com"
+
+        # When
+        result = _build_reply_body(original, "Reply", "en")
+
+        # Then
+        assert "Reply" in result
+        assert "> Test" in result
+
+
+class TestMainDraft:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_new_draft(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+
+        # When
+        with patch("sys.argv", ["email-draft", "--to", "user@example.com", "--subject", "Hi", "--body", "Hello"]):
+            main_draft()
+
+        # Then
+        mock_mb.append.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Draft created in [Gmail]/Drafts" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_reply_to_uid(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        original = _make_full_message(uid="100", subject="Original Subject")
+        original.headers = {"message-id": ["<abc@example.com>"], "references": [""]}
+        mock_mb.fetch.return_value = [original]
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+
+        # When
+        with patch("sys.argv", ["email-draft", "--reply-to-uid", "100", "--body", "Thanks"]):
+            main_draft()
+
+        # Then
+        mock_mb.append.assert_called_once()
+        call_args = mock_mb.append.call_args
+        draft_bytes = call_args[0][0]
+        assert b"Re: Original Subject" in draft_bytes
+        assert b"In-Reply-To: <abc@example.com>" in draft_bytes
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_reply_all_excludes_self(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        original = _make_full_message(uid="200", subject="Group thread")
+        original.to_values = [
+            MagicMock(email="me@test.com", full="Me <me@test.com>"),
+            MagicMock(email="other@test.com", full="Other <other@test.com>"),
+        ]
+        original.cc_values = [MagicMock(email="cc@test.com", full="CC <cc@test.com>")]
+        original.headers = {"message-id": ["<xyz@example.com>"], "references": [""]}
+        mock_mb.fetch.return_value = [original]
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+
+        # When
+        with patch("sys.argv", ["email-draft", "--reply-all-to-uid", "200", "--body", "Agreed"]):
+            main_draft()
+
+        # Then
+        mock_mb.append.assert_called_once()
+        call_args = mock_mb.append.call_args
+        draft_bytes = call_args[0][0]
+        # Self (me@test.com) should not be in CC
+        assert b"me@test.com" not in draft_bytes.split(b"Cc:")[1].split(b"\n")[0] if b"Cc:" in draft_bytes else True
+        assert b"Other <other@test.com>" in draft_bytes
+        assert b"CC <cc@test.com>" in draft_bytes
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_reply_avoids_double_re_prefix(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        original = _make_full_message(uid="300", subject="Re: Already replied")
+        original.headers = {"message-id": ["<id@test.com>"], "references": [""]}
+        mock_mb.fetch.return_value = [original]
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+
+        # When
+        with patch("sys.argv", ["email-draft", "--reply-to-uid", "300", "--body", "Ok"]):
+            main_draft()
+
+        # Then
+        call_args = mock_mb.append.call_args
+        draft_bytes = call_args[0][0]
+        # Should keep "Re: Already replied", not "Re: Re: Already replied"
+        assert b"Re: Already replied" in draft_bytes
+        assert b"Re: Re:" not in draft_bytes
