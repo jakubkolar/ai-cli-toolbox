@@ -23,6 +23,8 @@ firecrawl-search = "ai_cli_toolbox.firecrawl_utils:main_search"
 firecrawl-map = "ai_cli_toolbox.firecrawl_utils:main_map"
 firecrawl-crawl = "ai_cli_toolbox.firecrawl_utils:main_crawl"
 yt-transcript = "ai_cli_toolbox.yt_transcript:main"
+email-list = "ai_cli_toolbox.email_utils:main_list"
+email-folders = "ai_cli_toolbox.email_utils:main_folders"
 
 [dependency-groups]
 dev = [
