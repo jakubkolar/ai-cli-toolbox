@@ -2,8 +2,10 @@
 
 import argparse
 import datetime
+import email.message
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +13,10 @@ from imap_tools import AND
 from imap_tools.folder import FolderInfo
 
 from ai_cli_toolbox.email_utils import (
+    _attach_files,
     _build_criteria,
     _build_reply_body,
+    _create_folder_parents,
     _email_block_to_dict,
     _find_special_folder,
     _format_attachment_list,
@@ -20,10 +24,13 @@ from ai_cli_toolbox.email_utils import (
     _format_date_locale,
     _format_email_block,
     _format_email_full,
+    _get_delimiter,
+    _normalize_folder_path,
     _parse_date,
+    _validate_attachments,
     main_draft,
     main_flag,
-    main_folders,
+    main_folder,
     main_list,
     main_move,
     main_read,
@@ -60,8 +67,8 @@ def _make_message(**kwargs: object) -> MagicMock:
     return msg
 
 
-def _make_folder_info(name: str, flags: tuple[str, ...] = ()) -> FolderInfo:
-    return FolderInfo(name=name, delim="/", flags=flags)
+def _make_folder_info(name: str, flags: tuple[str, ...] = (), delim: str = "/") -> FolderInfo:
+    return FolderInfo(name=name, delim=delim, flags=flags)
 
 
 def _setup_mock_mailbox() -> MagicMock:
@@ -283,16 +290,97 @@ class TestEmailBlockToDict:
 
 
 # =============================================================================
-# main_folders (integration-level with mocks)
+# Folder management helpers
+# =============================================================================
+
+
+class TestGetDelimiter:
+    def test_returns_delimiter_from_first_folder(self):
+        # Given
+        mb = MagicMock()
+        mb.folder.list.return_value = [_make_folder_info("INBOX", delim=".")]
+
+        # When
+        result = _get_delimiter(mb)
+
+        # Then
+        assert result == "."
+
+    def test_falls_back_to_slash_when_no_folders(self):
+        # Given
+        mb = MagicMock()
+        mb.folder.list.return_value = []
+
+        # When
+        result = _get_delimiter(mb)
+
+        # Then
+        assert result == "/"
+
+
+class TestNormalizeFolderPath:
+    def test_replaces_slash_with_server_delimiter(self):
+        # When
+        result = _normalize_folder_path("Work/Projects/2026", ".")
+
+        # Then
+        assert result == "Work.Projects.2026"
+
+    def test_noop_when_delimiter_is_slash(self):
+        # When
+        result = _normalize_folder_path("Work/Projects/2026", "/")
+
+        # Then
+        assert result == "Work/Projects/2026"
+
+    def test_single_name_unchanged(self):
+        # When
+        result = _normalize_folder_path("Archive", ".")
+
+        # Then
+        assert result == "Archive"
+
+
+class TestCreateFolderParents:
+    def test_creates_intermediate_folders(self):
+        # Given
+        mb = MagicMock()
+        mb.folder.exists.side_effect = [False, False, False]
+
+        # When
+        _create_folder_parents(mb, "Work.Projects.2026", ".")
+
+        # Then
+        assert mb.folder.create.call_count == 3
+        mb.folder.create.assert_any_call("Work")
+        mb.folder.create.assert_any_call("Work.Projects")
+        mb.folder.create.assert_any_call("Work.Projects.2026")
+
+    def test_skips_existing_parents(self):
+        # Given
+        mb = MagicMock()
+        mb.folder.exists.side_effect = [True, False, False]
+
+        # When
+        _create_folder_parents(mb, "Work.Projects.2026", ".")
+
+        # Then
+        assert mb.folder.create.call_count == 2
+        mb.folder.create.assert_any_call("Work.Projects")
+        mb.folder.create.assert_any_call("Work.Projects.2026")
+
+
+# =============================================================================
+# main_folder (integration-level with mocks)
 # =============================================================================
 
 _ENV_CREDS = {"IMAP_USER": "user@test.com", "IMAP_PASSWORD": "pass"}
 
 
-class TestMainFolders:
+class TestMainFolderList:
     @patch("ai_cli_toolbox.email_utils._get_mailbox")
     @patch.dict("os.environ", _ENV_CREDS)
-    def test_folders_text_output(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+    def test_list_text_output(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
@@ -300,8 +388,8 @@ class TestMainFolders:
         mock_mb.folder.status.return_value = {"MESSAGES": 42, "UNSEEN": 5}
 
         # When
-        with patch("sys.argv", ["email-folders"]):
-            main_folders()
+        with patch("sys.argv", ["email-folder", "list"]):
+            main_folder()
 
         # Then
         captured = capsys.readouterr()
@@ -311,7 +399,7 @@ class TestMainFolders:
 
     @patch("ai_cli_toolbox.email_utils._get_mailbox")
     @patch.dict("os.environ", _ENV_CREDS)
-    def test_folders_json_output(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+    def test_list_json_output(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
@@ -319,13 +407,213 @@ class TestMainFolders:
         mock_mb.folder.status.return_value = {"MESSAGES": 10, "UNSEEN": 2}
 
         # When
-        with patch("sys.argv", ["email-folders", "--json"]):
-            main_folders()
+        with patch("sys.argv", ["email-folder", "list", "--json"]):
+            main_folder()
 
         # Then
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert data == [{"name": "INBOX", "messages": 10, "unseen": 2}]
+
+
+class TestMainFolderCreate:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_create_new_folder(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.side_effect = [False, False]  # exists check + parent create
+
+        # When
+        with patch("sys.argv", ["email-folder", "create", "Archive"]):
+            main_folder()
+
+        # Then
+        captured = capsys.readouterr()
+        assert 'Created folder "Archive"' in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_create_existing_folder_errors(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = True
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "create", "INBOX"]), pytest.raises(SystemExit):
+            main_folder()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_create_nested_folder_with_parents(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX", delim=".")]
+        # exists check for full path: False; parent creation exists checks: False, False, False
+        mock_mb.folder.exists.side_effect = [False, False, False, False]
+
+        # When
+        with patch("sys.argv", ["email-folder", "create", "Work/Projects/2026"]):
+            main_folder()
+
+        # Then
+        assert mock_mb.folder.create.call_count == 3
+        captured = capsys.readouterr()
+        assert 'Created folder "Work/Projects/2026"' in captured.err
+
+
+class TestMainFolderRename:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_rename_folder(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.side_effect = [True, False]  # old exists, new doesn't
+
+        # When
+        with patch("sys.argv", ["email-folder", "rename", "Old", "New"]):
+            main_folder()
+
+        # Then
+        mock_mb.folder.rename.assert_called_once_with("Old", "New")
+        captured = capsys.readouterr()
+        assert 'Renamed folder "Old" to "New"' in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_rename_missing_source_errors(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = False
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "rename", "Missing", "New"]), pytest.raises(SystemExit):
+            main_folder()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_rename_target_exists_errors(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.side_effect = [True, True]  # both exist
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "rename", "Old", "Existing"]), pytest.raises(SystemExit):
+            main_folder()
+
+
+class TestMainFolderDelete:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_delete_empty_folder(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = True
+        mock_mb.folder.status.return_value = {"MESSAGES": 0}
+
+        # When
+        with patch("sys.argv", ["email-folder", "delete", "Empty"]):
+            main_folder()
+
+        # Then
+        mock_mb.folder.delete.assert_called_once_with("Empty")
+        captured = capsys.readouterr()
+        assert 'Deleted folder "Empty"' in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_delete_non_empty_folder_refused(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = True
+        mock_mb.folder.status.return_value = {"MESSAGES": 15}
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "delete", "HasMail"]), pytest.raises(SystemExit):
+            main_folder()
+
+        captured = capsys.readouterr()
+        assert "15 messages" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_delete_non_empty_folder_with_force(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = True
+
+        # When
+        with patch("sys.argv", ["email-folder", "delete", "HasMail", "--force"]):
+            main_folder()
+
+        # Then
+        mock_mb.folder.delete.assert_called_once_with("HasMail")
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_delete_missing_folder_errors(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = False
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "delete", "Missing"]), pytest.raises(SystemExit):
+            main_folder()
+
+
+class TestMainFolderExists:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_folder_exists_exits_zero(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = True
+
+        # When
+        with patch("sys.argv", ["email-folder", "exists", "INBOX"]):
+            main_folder()
+
+        # Then
+        captured = capsys.readouterr()
+        assert 'Folder "INBOX" exists' in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_folder_not_found_exits_one(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+        mock_mb.folder.exists.return_value = False
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "exists", "Missing"]), pytest.raises(SystemExit) as exc_info:
+            main_folder()
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert 'Folder "Missing" not found' in captured.err
 
 
 # =============================================================================
@@ -780,3 +1068,163 @@ class TestMainDraft:
         # Should keep "Re: Already replied", not "Re: Re: Already replied"
         assert b"Re: Already replied" in draft_bytes
         assert b"Re: Re:" not in draft_bytes
+
+
+# =============================================================================
+# Changeset E: Attachment helpers and draft with attachments
+# =============================================================================
+
+
+class TestValidateAttachments:
+    def test_valid_files(self, tmp_path: Path):
+        # Given
+        f1 = tmp_path / "doc.pdf"
+        f1.write_bytes(b"PDF content")
+        f2 = tmp_path / "image.png"
+        f2.write_bytes(b"PNG content")
+
+        # When
+        result = _validate_attachments([str(f1), str(f2)], force=False)
+
+        # Then
+        assert result == [f1, f2]
+
+    def test_missing_file_exits(self, tmp_path: Path):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_attachments([str(tmp_path / "nonexistent.txt")], force=False)
+
+    def test_size_limit_exceeded_exits(self, tmp_path: Path):
+        # Given
+        big_file = tmp_path / "big.bin"
+        big_file.write_bytes(b"x" * (26 * 1024 * 1024))
+
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_attachments([str(big_file)], force=False)
+
+    def test_size_limit_override_with_force(self, tmp_path: Path):
+        # Given
+        big_file = tmp_path / "big.bin"
+        big_file.write_bytes(b"x" * (26 * 1024 * 1024))
+
+        # When
+        result = _validate_attachments([str(big_file)], force=True)
+
+        # Then
+        assert result == [big_file]
+
+
+class TestAttachFiles:
+    def test_attaches_pdf(self, tmp_path: Path):
+        # Given
+        pdf_file = tmp_path / "report.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 content")
+        msg = email.message.EmailMessage()
+        msg.set_content("Body text")
+
+        # When
+        _attach_files(msg, [pdf_file])
+
+        # Then
+        attachments = list(msg.iter_attachments())
+        assert len(attachments) == 1
+        assert attachments[0].get_filename() == "report.pdf"
+        assert attachments[0].get_content_type() == "application/pdf"
+
+    def test_attaches_unknown_type_as_octet_stream(self, tmp_path: Path):
+        # Given
+        unknown_file = tmp_path / "data.qzx"
+        unknown_file.write_bytes(b"binary data")
+        msg = email.message.EmailMessage()
+        msg.set_content("Body text")
+
+        # When
+        _attach_files(msg, [unknown_file])
+
+        # Then
+        attachments = list(msg.iter_attachments())
+        assert len(attachments) == 1
+        assert attachments[0].get_content_type() == "application/octet-stream"
+
+    def test_attaches_multiple_files(self, tmp_path: Path):
+        # Given
+        f1 = tmp_path / "doc.pdf"
+        f1.write_bytes(b"pdf")
+        f2 = tmp_path / "image.png"
+        f2.write_bytes(b"png")
+        msg = email.message.EmailMessage()
+        msg.set_content("Body")
+
+        # When
+        _attach_files(msg, [f1, f2])
+
+        # Then
+        attachments = list(msg.iter_attachments())
+        assert len(attachments) == 2
+
+
+class TestMainDraftWithAttachments:
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_draft_with_attachment(self, mock_get_mb: MagicMock, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+        att_file = tmp_path / "doc.pdf"
+        att_file.write_bytes(b"PDF content here")
+
+        # When
+        with patch(
+            "sys.argv",
+            [
+                "email-draft",
+                "--to",
+                "user@example.com",
+                "--subject",
+                "With attachment",
+                "--body",
+                "See attached",
+                "--attach",
+                str(att_file),
+            ],
+        ):
+            main_draft()
+
+        # Then
+        mock_mb.append.assert_called_once()
+        draft_bytes = mock_mb.append.call_args[0][0]
+        assert b"doc.pdf" in draft_bytes
+        captured = capsys.readouterr()
+        assert "1 attachment(s)" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_reply_with_attachment(self, mock_get_mb: MagicMock, tmp_path: Path):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        original = _make_full_message(uid="400", subject="Thread")
+        original.headers = {"message-id": ["<thread@test.com>"], "references": [""]}
+        mock_mb.fetch.return_value = [original]
+        mock_mb.folder.list.return_value = [
+            _make_folder_info("[Gmail]/Drafts", flags=("\\Drafts",)),
+        ]
+        att_file = tmp_path / "data.csv"
+        att_file.write_bytes(b"a,b,c")
+
+        # When
+        with patch(
+            "sys.argv",
+            ["email-draft", "--reply-to-uid", "400", "--body", "Here's the data", "--attach", str(att_file)],
+        ):
+            main_draft()
+
+        # Then
+        mock_mb.append.assert_called_once()
+        draft_bytes = mock_mb.append.call_args[0][0]
+        assert b"Re: Thread" in draft_bytes
+        assert b"data.csv" in draft_bytes

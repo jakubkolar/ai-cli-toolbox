@@ -5,8 +5,8 @@ Six CLI commands for AI-agent-friendly email operations:
 - email-read: Fetch full email content by UID
 - email-move: Move emails to a folder
 - email-flag: Mark emails as read/unread, starred/unstarred
-- email-draft: Create a draft email (with reply support)
-- email-folders: List available folders with counts
+- email-draft: Create a draft email (with reply support and attachments)
+- email-folder: Manage folders (list, create, rename, delete, exists)
 """
 
 import argparse
@@ -14,6 +14,7 @@ import datetime
 import email.message
 import email.utils
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -160,25 +161,152 @@ def _email_block_to_dict(msg: MailMessage, preview: int) -> dict[str, object]:
 
 
 # =============================================================================
-# Entry Point: email-folders
+# Folder management helpers
 # =============================================================================
 
 
-def main_folders() -> None:
-    """Entry point for email-folders command.
+def _get_delimiter(mb: MailBox) -> str:
+    """Discover the server's hierarchy delimiter from existing folders.
 
-    List available IMAP folders with message counts.
+    :param mb: Connected and logged-in MailBox.
+    :return: Hierarchy delimiter character.
+    """
+    folders: list[FolderInfo] = mb.folder.list()
+    if folders:
+        return folders[0].delim
+    return "/"
+
+
+def _normalize_folder_path(name: str, delimiter: str) -> str:
+    """Replace ``/`` in user input with the server's hierarchy delimiter.
+
+    :param name: Folder path as typed by the user.
+    :param delimiter: Server's hierarchy delimiter.
+    :return: Normalized folder path.
+    """
+    if delimiter == "/":
+        return name
+    return name.replace("/", delimiter)
+
+
+def _create_folder_parents(mb: MailBox, name: str, delimiter: str) -> None:
+    """Create folder and all intermediate parents (like ``mkdir -p``).
+
+    :param mb: Connected and logged-in MailBox.
+    :param name: Fully normalized folder path.
+    :param delimiter: Server's hierarchy delimiter.
+    """
+    parts = name.split(delimiter)
+    for i in range(1, len(parts) + 1):
+        partial = delimiter.join(parts[:i])
+        if not mb.folder.exists(partial):
+            mb.folder.create(partial)
+
+
+# =============================================================================
+# Entry Point: email-folder
+# =============================================================================
+
+
+def _folder_list(mb: MailBox, args: argparse.Namespace) -> None:
+    """Handle ``email-folder list`` subcommand."""
+    folders: list[FolderInfo] = mb.folder.list()
+    folder_data: list[dict[str, object]] = []
+    for f in folders:
+        try:
+            status = mb.folder.status(f.name, ("MESSAGES", "UNSEEN"))
+        except UnexpectedCommandStatusError:
+            continue
+        folder_data.append(
+            {
+                "name": f.name,
+                "messages": status.get("MESSAGES", 0),
+                "unseen": status.get("UNSEEN", 0),
+            }
+        )
+
+    if args.json:
+        print(json.dumps(folder_data, indent=2))
+    else:
+        max_name_len = max((len(str(fd["name"])) for fd in folder_data), default=10)
+        for fd in folder_data:
+            name = str(fd["name"])
+            msgs = fd["messages"]
+            unseen = fd["unseen"]
+            print(f"{name:<{max_name_len}}  {msgs} messages, {unseen} unseen")
+
+
+def _folder_create(mb: MailBox, args: argparse.Namespace) -> None:
+    """Handle ``email-folder create`` subcommand."""
+    delimiter = _get_delimiter(mb)
+    normalized = _normalize_folder_path(args.name, delimiter)
+    if mb.folder.exists(normalized):
+        sys.stderr.write(f'Error: Folder "{args.name}" already exists.\n')
+        sys.exit(1)
+    _create_folder_parents(mb, normalized, delimiter)
+    sys.stderr.write(f'Created folder "{args.name}"\n')
+
+
+def _folder_rename(mb: MailBox, args: argparse.Namespace) -> None:
+    """Handle ``email-folder rename`` subcommand."""
+    delimiter = _get_delimiter(mb)
+    old_normalized = _normalize_folder_path(args.old_name, delimiter)
+    new_normalized = _normalize_folder_path(args.new_name, delimiter)
+    if not mb.folder.exists(old_normalized):
+        sys.stderr.write(f'Error: Folder "{args.old_name}" does not exist.\n')
+        sys.exit(1)
+    if mb.folder.exists(new_normalized):
+        sys.stderr.write(f'Error: Folder "{args.new_name}" already exists.\n')
+        sys.exit(1)
+    mb.folder.rename(old_normalized, new_normalized)
+    sys.stderr.write(f'Renamed folder "{args.old_name}" to "{args.new_name}"\n')
+
+
+def _folder_delete(mb: MailBox, args: argparse.Namespace) -> None:
+    """Handle ``email-folder delete`` subcommand."""
+    delimiter = _get_delimiter(mb)
+    normalized = _normalize_folder_path(args.name, delimiter)
+    if not mb.folder.exists(normalized):
+        sys.stderr.write(f'Error: Folder "{args.name}" does not exist.\n')
+        sys.exit(1)
+    if not args.force:
+        status = mb.folder.status(normalized, ("MESSAGES",))
+        count = status.get("MESSAGES", 0)
+        if count > 0:
+            sys.stderr.write(
+                f'Error: Folder "{args.name}" has {count} messages. Move or delete messages first, or use --force.\n'
+            )
+            sys.exit(1)
+    mb.folder.delete(normalized)
+    sys.stderr.write(f'Deleted folder "{args.name}"\n')
+
+
+def _folder_exists(mb: MailBox, args: argparse.Namespace) -> None:
+    """Handle ``email-folder exists`` subcommand."""
+    delimiter = _get_delimiter(mb)
+    normalized = _normalize_folder_path(args.name, delimiter)
+    if mb.folder.exists(normalized):
+        sys.stderr.write(f'Folder "{args.name}" exists\n')
+    else:
+        sys.stderr.write(f'Folder "{args.name}" not found\n')
+        sys.exit(1)
+
+
+def main_folder() -> None:
+    """Entry point for email-folder command.
+
+    Manage mailbox folders: list, create, rename, delete, check existence.
     """
     parser = argparse.ArgumentParser(
-        prog="email-folders",
-        description="List available email folders with message counts.",
+        prog="email-folder",
+        description="Manage mailbox folders.",
         epilog="""\
-OUTPUT FORMAT:
-  Plain text (default): one folder per line with message counts
-    INBOX                          142 messages, 5 unseen
-    [Gmail]/Sent Mail              891 messages, 0 unseen
-
-  JSON (with --json): array of objects with name, messages, unseen fields.
+SUBCOMMANDS:
+  list    List folders with message counts
+  create  Create a new folder (with intermediate parents)
+  rename  Rename a folder
+  delete  Delete a folder (guards against non-empty)
+  exists  Check if a folder exists (exit code 0/1)
 
 ENVIRONMENT:
   IMAP_HOST      Required. IMAP server hostname.
@@ -187,51 +315,54 @@ ENVIRONMENT:
   IMAP_PORT      Optional. IMAP port (default: 993).
 
 EXAMPLES:
-  # List all folders
-  email-folders
-
-  # JSON output for programmatic use
-  email-folders --json
+  email-folder list
+  email-folder list --json
+  email-folder create "Work/Projects/2026"
+  email-folder rename "Old Name" "New Name"
+  email-folder delete "Empty Folder"
+  email-folder delete "Non-Empty" --force
+  email-folder exists "INBOX"
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="output as JSON array instead of plain text",
-    )
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    # list
+    sp_list = subparsers.add_parser("list", help="list folders with message counts")
+    sp_list.add_argument("--json", action="store_true", help="output as JSON array")
+
+    # create
+    sp_create = subparsers.add_parser("create", help="create a new folder")
+    sp_create.add_argument("name", help="folder name/path to create")
+
+    # rename
+    sp_rename = subparsers.add_parser("rename", help="rename a folder")
+    sp_rename.add_argument("old_name", help="current folder name")
+    sp_rename.add_argument("new_name", help="new folder name")
+
+    # delete
+    sp_delete = subparsers.add_parser("delete", help="delete a folder")
+    sp_delete.add_argument("name", help="folder name to delete")
+    sp_delete.add_argument("--force", action="store_true", help="delete even if folder contains messages")
+
+    # exists
+    sp_exists = subparsers.add_parser("exists", help="check if a folder exists")
+    sp_exists.add_argument("name", help="folder name to check")
 
     args = parser.parse_args()
+
+    dispatch = {
+        "list": _folder_list,
+        "create": _folder_create,
+        "rename": _folder_rename,
+        "delete": _folder_delete,
+        "exists": _folder_exists,
+    }
 
     try:
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder="INBOX"):
-            folders: list[FolderInfo] = mb.folder.list()
-            folder_data: list[dict[str, object]] = []
-            for f in folders:
-                try:
-                    status = mb.folder.status(f.name, ("MESSAGES", "UNSEEN"))
-                except UnexpectedCommandStatusError:
-                    # Virtual container folders (e.g. [Gmail]) don't support STATUS
-                    continue
-                folder_data.append(
-                    {
-                        "name": f.name,
-                        "messages": status.get("MESSAGES", 0),
-                        "unseen": status.get("UNSEEN", 0),
-                    }
-                )
-
-            if args.json:
-                print(json.dumps(folder_data, indent=2))
-            else:
-                # Calculate column width for alignment
-                max_name_len = max((len(str(fd["name"])) for fd in folder_data), default=10)
-                for fd in folder_data:
-                    name = str(fd["name"])
-                    msgs = fd["messages"]
-                    unseen = fd["unseen"]
-                    print(f"{name:<{max_name_len}}  {msgs} messages, {unseen} unseen")
+            dispatch[args.subcommand](mb, args)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -859,6 +990,55 @@ def _compose_new_draft(args: argparse.Namespace, user: str, user_body: str) -> e
 
 
 # =============================================================================
+# Attachment helpers
+# =============================================================================
+
+_MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024  # 25 MB
+
+
+def _validate_attachments(paths: list[str], *, force: bool) -> list[Path]:
+    """Validate attachment file paths and cumulative size.
+
+    :param paths: File path strings from CLI args.
+    :param force: Override the 25 MB size limit.
+    :return: List of validated Path objects.
+    """
+    validated: list[Path] = []
+    total_size = 0
+    for p in paths:
+        file_path = Path(p)
+        if not file_path.is_file():
+            sys.stderr.write(f'Error: Attachment not found or not a file: "{p}"\n')
+            sys.exit(1)
+        total_size += file_path.stat().st_size
+        validated.append(file_path)
+
+    if not force and total_size > _MAX_ATTACHMENT_SIZE:
+        size_mb = total_size / (1024 * 1024)
+        sys.stderr.write(
+            f"Error: Total attachment size ({size_mb:.1f} MB) exceeds 25 MB limit. Use --force to override.\n"
+        )
+        sys.exit(1)
+
+    return validated
+
+
+def _attach_files(msg: email.message.EmailMessage, paths: list[Path]) -> None:
+    """Attach files to an EmailMessage.
+
+    :param msg: Email message to attach files to.
+    :param paths: Validated file paths.
+    """
+    for file_path in paths:
+        data = file_path.read_bytes()
+        mime_type, _encoding = mimetypes.guess_type(str(file_path))
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+        maintype, subtype = mime_type.split("/", 1)
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=file_path.name)
+
+
+# =============================================================================
 # Entry Point: email-draft
 # =============================================================================
 
@@ -866,11 +1046,11 @@ def _compose_new_draft(args: argparse.Namespace, user: str, user_body: str) -> e
 def main_draft() -> None:
     """Entry point for email-draft command.
 
-    Create a draft email (with reply support).
+    Create a draft email (with reply support and attachments).
     """
     parser = argparse.ArgumentParser(
         prog="email-draft",
-        description="Create a draft email (with reply support).",
+        description="Create a draft email (with reply support and attachments).",
         epilog="""\
 REPLY BEHAVIOR:
   --reply-all-to-uid: Reply-all (To = sender, CC = original To/CC minus self)
@@ -879,8 +1059,13 @@ REPLY BEHAVIOR:
 
   Attribution line format: "{date}, {sender}:" followed by quoted original.
 
+ATTACHMENTS:
+  --attach is repeatable: --attach file1.pdf --attach file2.png
+  MIME type auto-detected. 25 MB cumulative limit (--force to override).
+
 DRAFT CREATION:
-  Plain text only. Created via IMAP APPEND to Drafts folder.
+  Plain text body. Attachments create multipart MIME message.
+  Created via IMAP APPEND to Drafts folder.
   User reviews and sends manually from email client.
 
 ENVIRONMENT:
@@ -893,6 +1078,10 @@ ENVIRONMENT:
 EXAMPLES:
   # Create a new draft
   email-draft --to user@example.com --subject "Hello" --body "Hi there"
+
+  # Draft with attachments
+  email-draft --to user@example.com --subject "Files" --body "See attached" \\
+    --attach report.pdf --attach data.csv
 
   # Reply to an email
   email-draft --reply-to-uid 12345 --body "Thanks for the info"
@@ -919,6 +1108,7 @@ SHELL QUOTING:
     parser.add_argument("--cc", help="CC recipient(s), comma-separated")
     parser.add_argument("--subject", help="email subject")
     parser.add_argument("--body", help="email body (plain text; reads stdin if omitted)")
+    parser.add_argument("--attach", action="append", default=[], metavar="FILE", help="file to attach (repeatable)")
     parser.add_argument("--reply-all-to-uid", metavar="UID", help="UID of email to reply-all to")
     parser.add_argument("--reply-to-uid", metavar="UID", help="UID of email to reply to sender only")
     parser.add_argument("--folder", default="INBOX", help="folder of original email for replies (default: INBOX)")
@@ -927,6 +1117,7 @@ SHELL QUOTING:
         default=os.environ.get("IMAP_LOCALE", "en"),
         help="locale for date formatting in reply attribution (default: en)",
     )
+    parser.add_argument("--force", action="store_true", help="override attachment size limit")
 
     args = parser.parse_args()
 
@@ -941,6 +1132,11 @@ SHELL QUOTING:
         if not args.subject:
             parser.error("--subject is required for new drafts (not replying)")
 
+    # Validate attachments before connecting (fail fast)
+    attachment_paths: list[Path] = []
+    if args.attach:
+        attachment_paths = _validate_attachments(args.attach, force=args.force)
+
     user_body = _read_body_input(args)
 
     try:
@@ -952,9 +1148,14 @@ SHELL QUOTING:
             else:
                 msg = _compose_new_draft(args, user, user_body)
 
+            if attachment_paths:
+                _attach_files(msg, attachment_paths)
+
             drafts_folder = _find_special_folder(mb, "\\Drafts")
             mb.append(msg.as_bytes(), drafts_folder, dt=datetime.datetime.now(tz=datetime.UTC))
-            sys.stderr.write(f"Draft created in {drafts_folder}\n")
+
+            att_note = f" ({len(attachment_paths)} attachment(s))" if attachment_paths else ""
+            sys.stderr.write(f"Draft created in {drafts_folder}{att_note}\n")
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
