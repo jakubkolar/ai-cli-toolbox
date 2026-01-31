@@ -90,7 +90,7 @@ def _slugify_title(title: str, url: str, max_length: int = 100) -> str:
     if not slug:
         slug = "video"
 
-    url_hash = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324  # not cryptographic, used for filename uniqueness
     max_slug_length = max_length - len(url_hash) - 4  # 4 = underscore + .md
 
     if len(slug) > max_slug_length:
@@ -185,7 +185,7 @@ def _fetch_transcript(video_id: str) -> str | None:
         formatter = TextFormatter()
         return formatter.format_transcript(fetched)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # youtube-transcript-api raises various exception types
         sys.stderr.write(f"Error fetching transcript: {e}\n")
         return None
 

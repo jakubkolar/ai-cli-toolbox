@@ -37,7 +37,7 @@ def _get_client() -> Firecrawl:
     if api_key is None:
         sys.stderr.write("Error: FIRECRAWL_API_KEY environment variable not set\n")
         sys.exit(1)
-    return Firecrawl(api_key=api_key)  # ty: ignore[invalid-argument-type]
+    return Firecrawl(api_key=api_key)  # ty: ignore[invalid-argument-type]  # SDK accepts str, ty infers wrong param type
 
 
 def _format_markdown_output(content: str, title: str, url: str) -> str:
@@ -82,7 +82,7 @@ def _slugify_url(url: str, max_length: int = 100) -> str:
     if not slug:
         slug = "index"
 
-    url_hash = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324  # not cryptographic, used for filename uniqueness
     max_slug_length = max_length - len(url_hash) - 4  # 4 = underscore + .md
 
     if len(slug) > max_slug_length:
@@ -278,7 +278,7 @@ def _scrape_single_url(client: Firecrawl, url: str, file_path: Path, *, full_pag
         output = _format_markdown_output(content, title, source_url)
         file_path.write_text(output, encoding="utf-8")
         return True, None
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # Firecrawl SDK raises various exception types
         return False, str(e)
 
 
@@ -701,7 +701,7 @@ def _print_crawl_errors(client: Firecrawl, job_id: str) -> None:
                 sys.stderr.write(f"  - {err.url}: {err.error}\n")
         if errors_response.robots_blocked:
             sys.stderr.write(f"Blocked by robots.txt: {len(errors_response.robots_blocked)} URLs\n")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # best-effort error reporting, must not crash
         sys.stderr.write(f"Could not fetch error details: {e}\n")
 
 
@@ -852,7 +852,7 @@ EXAMPLES:
         sys.stderr.write("\nInterrupted. Cancelling crawl job...\n")
         try:
             client.cancel_crawl(job_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001  # best-effort cancel on interrupt, must not crash
             sys.stderr.write(f"Failed to cancel crawl: {e}\n")
         result = client.get_crawl_status(job_id)
 
