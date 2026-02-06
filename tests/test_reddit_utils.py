@@ -3,6 +3,7 @@
 import pytest
 
 from ai_cli_toolbox.reddit_utils import (
+    Comment,
     Post,
     RedditError,
     _make_json_url,
@@ -143,10 +144,19 @@ class TestParsePost:
         result = _parse_post(data)
 
         # Then
-        assert result.title == ""  # noqa: PLC1901
-        assert result.author == "[deleted]"
-        assert result.score == 0
-        assert result.selftext == ""  # noqa: PLC1901
+        assert result == Post(
+            title="",
+            author="[deleted]",
+            score=0,
+            upvote_ratio=0.0,
+            created_at="1970-01-01T00:00:00Z",
+            num_comments=0,
+            archived=False,
+            locked=False,
+            selftext="",
+            subreddit="",
+            url="https://www.reddit.com",
+        )
 
 
 class TestParseComment:
@@ -169,13 +179,18 @@ class TestParseComment:
         result = _parse_comment(data, max_depth=5)
 
         # Then
-        assert result is not None
-        assert result.author == "commenter"
-        assert result.score == 5
-        assert result.depth == 0
-        assert result.body == "This is a comment"
-        assert result.edited is False
-        assert result.replies == ()
+        assert result == Comment(
+            author="commenter",
+            score=5,
+            upvote_ratio=0.8,
+            created_at="2024-10-28T08:35:44Z",
+            depth=0,
+            is_submitter=False,
+            distinguished=None,
+            edited=False,
+            body="This is a comment",
+            replies=(),
+        )
 
     def test_filters_deleted_comment(self):
         # Given
@@ -223,8 +238,14 @@ class TestParseComment:
         # Given
         data = {
             "author": "commenter",
+            "score": 0,
+            "upvote_ratio": 1.0,
+            "created_utc": 0.0,
             "body": "At max depth",
             "depth": 5,
+            "is_submitter": False,
+            "distinguished": None,
+            "edited": False,
             "replies": "",
         }
 
@@ -232,15 +253,30 @@ class TestParseComment:
         result = _parse_comment(data, max_depth=5)
 
         # Then
-        assert result is not None
-        assert result.depth == 5
+        assert result == Comment(
+            author="commenter",
+            score=0,
+            upvote_ratio=1.0,
+            created_at="1970-01-01T00:00:00Z",
+            depth=5,
+            is_submitter=False,
+            distinguished=None,
+            edited=False,
+            body="At max depth",
+            replies=(),
+        )
 
     def test_edited_true_when_timestamp_present(self):
         # Given
         data = {
             "author": "commenter",
+            "score": 0,
+            "upvote_ratio": 1.0,
+            "created_utc": 0.0,
             "body": "Edited comment",
             "depth": 0,
+            "is_submitter": False,
+            "distinguished": None,
             "edited": 1730105000.0,
             "replies": "",
         }
@@ -249,8 +285,18 @@ class TestParseComment:
         result = _parse_comment(data, max_depth=5)
 
         # Then
-        assert result is not None
-        assert result.edited is True
+        assert result == Comment(
+            author="commenter",
+            score=0,
+            upvote_ratio=1.0,
+            created_at="1970-01-01T00:00:00Z",
+            depth=0,
+            is_submitter=False,
+            distinguished=None,
+            edited=True,
+            body="Edited comment",
+            replies=(),
+        )
 
 
 class TestParseCommentTree:
@@ -264,8 +310,14 @@ class TestParseCommentTree:
                         "kind": "t1",
                         "data": {
                             "author": "user1",
+                            "score": 0,
+                            "upvote_ratio": 1.0,
+                            "created_utc": 0.0,
                             "body": "Comment 1",
                             "depth": 0,
+                            "is_submitter": False,
+                            "distinguished": None,
+                            "edited": False,
                             "replies": "",
                         },
                     },
@@ -273,8 +325,14 @@ class TestParseCommentTree:
                         "kind": "t1",
                         "data": {
                             "author": "user2",
+                            "score": 0,
+                            "upvote_ratio": 1.0,
+                            "created_utc": 0.0,
                             "body": "Comment 2",
                             "depth": 0,
+                            "is_submitter": False,
+                            "distinguished": None,
+                            "edited": False,
                             "replies": "",
                         },
                     },
@@ -286,10 +344,32 @@ class TestParseCommentTree:
         result = _parse_comment_tree(listing, max_depth=5)
 
         # Then
-        assert len(result) == 2
-        assert isinstance(result, tuple)
-        assert result[0].author == "user1"
-        assert result[1].author == "user2"
+        assert result == (
+            Comment(
+                author="user1",
+                score=0,
+                upvote_ratio=1.0,
+                created_at="1970-01-01T00:00:00Z",
+                depth=0,
+                is_submitter=False,
+                distinguished=None,
+                edited=False,
+                body="Comment 1",
+                replies=(),
+            ),
+            Comment(
+                author="user2",
+                score=0,
+                upvote_ratio=1.0,
+                created_at="1970-01-01T00:00:00Z",
+                depth=0,
+                is_submitter=False,
+                distinguished=None,
+                edited=False,
+                body="Comment 2",
+                replies=(),
+            ),
+        )
 
     def test_skips_more_markers(self):
         # Given
@@ -301,8 +381,14 @@ class TestParseCommentTree:
                         "kind": "t1",
                         "data": {
                             "author": "user1",
+                            "score": 0,
+                            "upvote_ratio": 1.0,
+                            "created_utc": 0.0,
                             "body": "Comment 1",
                             "depth": 0,
+                            "is_submitter": False,
+                            "distinguished": None,
+                            "edited": False,
                             "replies": "",
                         },
                     },
@@ -321,8 +407,20 @@ class TestParseCommentTree:
         result = _parse_comment_tree(listing, max_depth=5)
 
         # Then
-        assert len(result) == 1
-        assert result[0].author == "user1"
+        assert result == (
+            Comment(
+                author="user1",
+                score=0,
+                upvote_ratio=1.0,
+                created_at="1970-01-01T00:00:00Z",
+                depth=0,
+                is_submitter=False,
+                distinguished=None,
+                edited=False,
+                body="Comment 1",
+                replies=(),
+            ),
+        )
 
     def test_handles_nested_replies(self):
         # Given
@@ -334,8 +432,14 @@ class TestParseCommentTree:
                         "kind": "t1",
                         "data": {
                             "author": "parent",
+                            "score": 0,
+                            "upvote_ratio": 1.0,
+                            "created_utc": 0.0,
                             "body": "Parent comment",
                             "depth": 0,
+                            "is_submitter": False,
+                            "distinguished": None,
+                            "edited": False,
                             "replies": {
                                 "kind": "Listing",
                                 "data": {
@@ -344,8 +448,14 @@ class TestParseCommentTree:
                                             "kind": "t1",
                                             "data": {
                                                 "author": "child",
+                                                "score": 0,
+                                                "upvote_ratio": 1.0,
+                                                "created_utc": 0.0,
                                                 "body": "Child comment",
                                                 "depth": 1,
+                                                "is_submitter": False,
+                                                "distinguished": None,
+                                                "edited": False,
                                                 "replies": "",
                                             },
                                         }
@@ -362,10 +472,33 @@ class TestParseCommentTree:
         result = _parse_comment_tree(listing, max_depth=5)
 
         # Then
-        assert len(result) == 1
-        assert result[0].author == "parent"
-        assert len(result[0].replies) == 1
-        assert result[0].replies[0].author == "child"
+        assert result == (
+            Comment(
+                author="parent",
+                score=0,
+                upvote_ratio=1.0,
+                created_at="1970-01-01T00:00:00Z",
+                depth=0,
+                is_submitter=False,
+                distinguished=None,
+                edited=False,
+                body="Parent comment",
+                replies=(
+                    Comment(
+                        author="child",
+                        score=0,
+                        upvote_ratio=1.0,
+                        created_at="1970-01-01T00:00:00Z",
+                        depth=1,
+                        is_submitter=False,
+                        distinguished=None,
+                        edited=False,
+                        body="Child comment",
+                        replies=(),
+                    ),
+                ),
+            ),
+        )
 
     def test_returns_empty_tuple_for_non_listing(self):
         # Given
@@ -444,8 +577,6 @@ class TestTruncateText:
         result = _truncate_text(text, 20)
 
         # Then
-        assert len(result) == 20
-        assert result.endswith("...")
         assert result == "This is a much lo..."
 
     def test_exact_length_unchanged(self):
