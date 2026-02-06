@@ -3,6 +3,7 @@
 import pytest
 
 from ai_cli_toolbox.reddit_utils import (
+    Post,
     RedditError,
     _make_json_url,
     _parse_comment,
@@ -120,19 +121,19 @@ class TestParsePost:
         result = _parse_post(data)
 
         # Then
-        assert result == {
-            "title": "Test Post Title",
-            "author": "test_user",
-            "score": 42,
-            "upvote_ratio": 0.95,
-            "created_at": "2024-10-28T08:21:39Z",
-            "num_comments": 10,
-            "archived": True,
-            "locked": False,
-            "selftext": "This is the post body",
-            "subreddit": "python",
-            "url": "https://www.reddit.com/r/python/comments/abc123/test_post/",
-        }
+        assert result == Post(
+            title="Test Post Title",
+            author="test_user",
+            score=42,
+            upvote_ratio=0.95,
+            created_at="2024-10-28T08:21:39Z",
+            num_comments=10,
+            archived=True,
+            locked=False,
+            selftext="This is the post body",
+            subreddit="python",
+            url="https://www.reddit.com/r/python/comments/abc123/test_post/",
+        )
 
     def test_handles_missing_fields_with_defaults(self):
         # Given
@@ -141,11 +142,11 @@ class TestParsePost:
         # When
         result = _parse_post(data)
 
-        # Then - explicitly check for empty string, not just falsy
-        assert result["title"] == ""  # noqa: PLC1901
-        assert result["author"] == "[deleted]"
-        assert result["score"] == 0
-        assert result["selftext"] == ""  # noqa: PLC1901
+        # Then
+        assert result.title == ""  # noqa: PLC1901
+        assert result.author == "[deleted]"
+        assert result.score == 0
+        assert result.selftext == ""  # noqa: PLC1901
 
 
 class TestParseComment:
@@ -169,12 +170,12 @@ class TestParseComment:
 
         # Then
         assert result is not None
-        assert result["author"] == "commenter"
-        assert result["score"] == 5
-        assert result["depth"] == 0
-        assert result["body"] == "This is a comment"
-        assert result["edited"] == "false"
-        assert result["replies"] == []
+        assert result.author == "commenter"
+        assert result.score == 5
+        assert result.depth == 0
+        assert result.body == "This is a comment"
+        assert result.edited is False
+        assert result.replies == ()
 
     def test_filters_deleted_comment(self):
         # Given
@@ -232,7 +233,7 @@ class TestParseComment:
 
         # Then
         assert result is not None
-        assert result["depth"] == 5
+        assert result.depth == 5
 
     def test_edited_true_when_timestamp_present(self):
         # Given
@@ -249,7 +250,7 @@ class TestParseComment:
 
         # Then
         assert result is not None
-        assert result["edited"] == "true"
+        assert result.edited is True
 
 
 class TestParseCommentTree:
@@ -286,8 +287,9 @@ class TestParseCommentTree:
 
         # Then
         assert len(result) == 2
-        assert result[0]["author"] == "user1"
-        assert result[1]["author"] == "user2"
+        assert isinstance(result, tuple)
+        assert result[0].author == "user1"
+        assert result[1].author == "user2"
 
     def test_skips_more_markers(self):
         # Given
@@ -320,7 +322,7 @@ class TestParseCommentTree:
 
         # Then
         assert len(result) == 1
-        assert result[0]["author"] == "user1"
+        assert result[0].author == "user1"
 
     def test_handles_nested_replies(self):
         # Given
@@ -361,11 +363,11 @@ class TestParseCommentTree:
 
         # Then
         assert len(result) == 1
-        assert result[0]["author"] == "parent"
-        assert len(result[0]["replies"]) == 1
-        assert result[0]["replies"][0]["author"] == "child"
+        assert result[0].author == "parent"
+        assert len(result[0].replies) == 1
+        assert result[0].replies[0].author == "child"
 
-    def test_returns_empty_for_non_listing(self):
+    def test_returns_empty_tuple_for_non_listing(self):
         # Given
         not_a_listing = {"kind": "something_else", "data": {}}
 
@@ -373,7 +375,7 @@ class TestParseCommentTree:
         result = _parse_comment_tree(not_a_listing, max_depth=5)
 
         # Then
-        assert result == []
+        assert result == ()
 
 
 class TestSlugifyUrl:

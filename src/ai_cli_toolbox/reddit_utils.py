@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,71 @@ This is a temporary limit, not a permanent failure.
 """
 
 
+# =============================================================================
+# Domain Models
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class Post:
+    """Parsed Reddit post."""
+
+    title: str
+    author: str
+    score: int
+    upvote_ratio: float
+    created_at: str
+    num_comments: int
+    archived: bool
+    locked: bool
+    selftext: str
+    subreddit: str
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class Comment:
+    """Parsed Reddit comment with nested replies."""
+
+    author: str
+    score: int
+    upvote_ratio: float
+    created_at: str
+    depth: int
+    is_submitter: bool
+    distinguished: str | None
+    edited: bool
+    body: str
+    replies: tuple["Comment", ...]
+    """Immutable sequence for frozen dataclass."""
+
+
+@dataclass(frozen=True, slots=True)
+class FeedPost:
+    """Post summary from subreddit feed (no comments)."""
+
+    title: str
+    url: str
+    author: str
+    score: int
+    upvote_ratio: float
+    num_comments: int
+    created_at: str
+    selftext: str
+
+
+# =============================================================================
+# Exceptions
+# =============================================================================
+
+
 class RedditError(Exception):
     """Base exception for Reddit-related errors."""
+
+
+# =============================================================================
+# URL Handling
+# =============================================================================
 
 
 def _validate_reddit_url(url: str) -> str:
@@ -66,6 +130,11 @@ def _make_json_url(url: str) -> str:
     :return: URL with .json suffix.
     """
     return f"{url}.json"
+
+
+# =============================================================================
+# HTTP
+# =============================================================================
 
 
 def _fetch_json(url: str) -> dict[str, Any] | list[Any]:
@@ -107,6 +176,11 @@ def _fetch_json(url: str) -> dict[str, Any] | list[Any]:
     except json.JSONDecodeError as e:
         msg = "Failed to parse Reddit response"
         raise RedditError(msg) from e
+
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
 
 
 def _parse_timestamp(unix_ts: float) -> str:
@@ -173,34 +247,34 @@ def _truncate_text(text: str, length: int) -> str:
 # =============================================================================
 
 
-def _parse_post(data: dict[str, Any]) -> dict[str, Any]:
+def _parse_post(data: dict[str, Any]) -> Post:
     """Extract post fields from Reddit JSON.
 
     :param data: Post data from Reddit JSON (the "data" field of a t3 thing).
-    :return: Dictionary with essential post fields.
+    :return: Post dataclass with essential fields.
     """
-    return {
-        "title": data.get("title", ""),
-        "author": data.get("author", "[deleted]"),
-        "score": data.get("score", 0),
-        "upvote_ratio": data.get("upvote_ratio", 0.0),
-        "created_at": _parse_timestamp(data.get("created_utc", 0)),
-        "num_comments": data.get("num_comments", 0),
-        "archived": data.get("archived", False),
-        "locked": data.get("locked", False),
-        "selftext": data.get("selftext", ""),
-        "subreddit": data.get("subreddit", ""),
-        "url": f"https://www.reddit.com{data.get('permalink', '')}",
-    }
+    return Post(
+        title=data.get("title", ""),
+        author=data.get("author", "[deleted]"),
+        score=data.get("score", 0),
+        upvote_ratio=data.get("upvote_ratio", 0.0),
+        created_at=_parse_timestamp(data.get("created_utc", 0)),
+        num_comments=data.get("num_comments", 0),
+        archived=data.get("archived", False),
+        locked=data.get("locked", False),
+        selftext=data.get("selftext", ""),
+        subreddit=data.get("subreddit", ""),
+        url=f"https://www.reddit.com{data.get('permalink', '')}",
+    )
 
 
-def _parse_comment(data: dict[str, Any], max_depth: int, current_depth: int = 0) -> dict[str, Any] | None:
+def _parse_comment(data: dict[str, Any], max_depth: int, current_depth: int = 0) -> Comment | None:
     """Extract comment fields from Reddit JSON, recursively parsing replies.
 
     :param data: Comment data from Reddit JSON (the "data" field of a t1 thing).
     :param max_depth: Maximum depth to include.
     :param current_depth: Current recursion depth.
-    :return: Dictionary with comment fields, or None if filtered out.
+    :return: Comment dataclass, or None if filtered out.
     """
     body = data.get("body", "")
 
@@ -214,42 +288,41 @@ def _parse_comment(data: dict[str, Any], max_depth: int, current_depth: int = 0)
     if depth > max_depth:
         return None
 
-    edited = data.get("edited", False)
-    edited_str = "false" if edited is False else "true"
-
-    comment: dict[str, Any] = {
-        "author": data.get("author", "[deleted]"),
-        "score": data.get("score", 0),
-        "upvote_ratio": data.get("upvote_ratio", 1.0),
-        "created_at": _parse_timestamp(data.get("created_utc", 0)),
-        "depth": depth,
-        "is_submitter": data.get("is_submitter", False),
-        "distinguished": data.get("distinguished"),
-        "edited": edited_str,
-        "body": body,
-        "replies": [],
-    }
+    edited_raw = data.get("edited", False)
+    edited = edited_raw is not False
 
     # Parse nested replies
     replies_data = data.get("replies", "")
+    replies: tuple[Comment, ...] = ()
     if replies_data and isinstance(replies_data, dict):
-        comment["replies"] = _parse_comment_tree(replies_data, max_depth, depth + 1)
+        replies = _parse_comment_tree(replies_data, max_depth, depth + 1)
 
-    return comment
+    return Comment(
+        author=data.get("author", "[deleted]"),
+        score=data.get("score", 0),
+        upvote_ratio=data.get("upvote_ratio", 1.0),
+        created_at=_parse_timestamp(data.get("created_utc", 0)),
+        depth=depth,
+        is_submitter=data.get("is_submitter", False),
+        distinguished=data.get("distinguished"),
+        edited=edited,
+        body=body,
+        replies=replies,
+    )
 
 
-def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: int = 0) -> list[dict[str, Any]]:
+def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: int = 0) -> tuple[Comment, ...]:
     """Walk a Listing and parse all comments.
 
     :param listing: Listing object from Reddit JSON.
     :param max_depth: Maximum comment depth to include.
     :param current_depth: Current depth in the tree.
-    :return: List of parsed comment dictionaries.
+    :return: Tuple of parsed Comment dataclasses.
     """
-    comments: list[dict[str, Any]] = []
+    comments: list[Comment] = []
 
     if listing.get("kind") != "Listing":
-        return comments
+        return ()
 
     children = listing.get("data", {}).get("children", [])
 
@@ -263,7 +336,7 @@ def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: 
 
         # Skip "more" markers for now - expansion would require additional requests
 
-    return comments
+    return tuple(comments)
 
 
 # =============================================================================
@@ -272,37 +345,37 @@ def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: 
 
 
 def _build_xml_tree(
-    post: dict[str, Any],
-    comments: list[dict[str, Any]],
+    post: Post,
+    comments: tuple[Comment, ...],
     url: str,
     retrieved_at: str,
 ) -> Element:
     """Construct XML ElementTree from parsed post and comments.
 
-    :param post: Parsed post dictionary.
-    :param comments: List of parsed comment dictionaries.
+    :param post: Parsed Post dataclass.
+    :param comments: Tuple of parsed Comment dataclasses.
     :param url: Original Reddit URL.
     :param retrieved_at: ISO timestamp of retrieval.
     :return: Root Element of the XML tree.
     """
     root = Element("reddit-thread")
     root.set("url", url)
-    root.set("subreddit", post.get("subreddit", ""))
+    root.set("subreddit", post.subreddit)
     root.set("retrieved_at", retrieved_at)
 
     # Post element
     post_elem = SubElement(root, "post")
-    post_elem.set("title", post.get("title", ""))
-    post_elem.set("author", post.get("author", ""))
-    post_elem.set("score", str(post.get("score", 0)))
-    post_elem.set("upvote_ratio", str(post.get("upvote_ratio", 0.0)))
-    post_elem.set("created_at", post.get("created_at", ""))
-    post_elem.set("num_comments", str(post.get("num_comments", 0)))
-    post_elem.set("archived", str(post.get("archived", False)).lower())
-    post_elem.set("locked", str(post.get("locked", False)).lower())
+    post_elem.set("title", post.title)
+    post_elem.set("author", post.author)
+    post_elem.set("score", str(post.score))
+    post_elem.set("upvote_ratio", str(post.upvote_ratio))
+    post_elem.set("created_at", post.created_at)
+    post_elem.set("num_comments", str(post.num_comments))
+    post_elem.set("archived", str(post.archived).lower())
+    post_elem.set("locked", str(post.locked).lower())
 
     selftext_elem = SubElement(post_elem, "selftext")
-    selftext_elem.text = post.get("selftext", "")
+    selftext_elem.text = post.selftext
 
     # Comments element
     comments_elem = SubElement(root, "comments")
@@ -311,30 +384,29 @@ def _build_xml_tree(
     return root
 
 
-def _add_comments_to_xml(parent: Element, comments: list[dict[str, Any]]) -> None:
+def _add_comments_to_xml(parent: Element, comments: tuple[Comment, ...]) -> None:
     """Recursively add comments to XML element.
 
     :param parent: Parent XML element to add comments to.
-    :param comments: List of comment dictionaries.
+    :param comments: Tuple of Comment dataclasses.
     """
     for comment in comments:
         comment_elem = SubElement(parent, "comment")
-        comment_elem.set("author", comment.get("author", ""))
-        comment_elem.set("score", str(comment.get("score", 0)))
-        comment_elem.set("upvote_ratio", str(comment.get("upvote_ratio", 1.0)))
-        comment_elem.set("created_at", comment.get("created_at", ""))
-        comment_elem.set("depth", str(comment.get("depth", 0)))
-        comment_elem.set("is_submitter", str(comment.get("is_submitter", False)).lower())
-        comment_elem.set("distinguished", comment.get("distinguished") or "")
-        comment_elem.set("edited", comment.get("edited", "false"))
+        comment_elem.set("author", comment.author)
+        comment_elem.set("score", str(comment.score))
+        comment_elem.set("upvote_ratio", str(comment.upvote_ratio))
+        comment_elem.set("created_at", comment.created_at)
+        comment_elem.set("depth", str(comment.depth))
+        comment_elem.set("is_submitter", str(comment.is_submitter).lower())
+        comment_elem.set("distinguished", comment.distinguished or "")
+        comment_elem.set("edited", str(comment.edited).lower())
 
         body_elem = SubElement(comment_elem, "body")
-        body_elem.text = comment.get("body", "")
+        body_elem.text = comment.body
 
-        replies = comment.get("replies", [])
-        if replies:
+        if comment.replies:
             replies_elem = SubElement(comment_elem, "replies")
-            _add_comments_to_xml(replies_elem, replies)
+            _add_comments_to_xml(replies_elem, comment.replies)
 
 
 def _check_output_exists(path: Path, *, force: bool) -> bool:
@@ -355,12 +427,12 @@ def _check_output_exists(path: Path, *, force: bool) -> bool:
 # =============================================================================
 
 
-def _scrape_thread(url: str, max_depth: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _scrape_thread(url: str, max_depth: int) -> tuple[Post, tuple[Comment, ...]]:
     """Fetch and parse a Reddit thread.
 
     :param url: Reddit post URL.
     :param max_depth: Maximum comment depth.
-    :return: Tuple of (post_dict, comments_list).
+    :return: Tuple of (Post, comments tuple).
     :raises RedditError: On fetch or parse errors.
     """
     normalized_url = _validate_reddit_url(url)
@@ -485,7 +557,7 @@ EXAMPLES:
         with output_path.open("w", encoding="utf-8") as f:
             f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             tree.write(f, encoding="unicode")
-        sys.stderr.write(f"Fetched: {args.url} ({post.get('num_comments', 0)} comments)\n")
+        sys.stderr.write(f"Fetched: {args.url} ({post.num_comments} comments)\n")
         sys.stderr.write(f"Saved to: {output_path}\n")
     else:
         print('<?xml version="1.0" encoding="UTF-8"?>')
@@ -665,12 +737,12 @@ EXAMPLES:
 # =============================================================================
 
 
-def _fetch_feed(url: str, limit: int) -> list[dict[str, Any]]:
+def _fetch_feed(url: str, limit: int) -> list[FeedPost]:
     """Fetch subreddit feed posts.
 
     :param url: Subreddit URL.
     :param limit: Maximum number of posts to return.
-    :return: List of post dictionaries.
+    :return: List of FeedPost dataclasses.
     :raises RedditError: On fetch or parse errors.
     """
     normalized_url = _validate_reddit_url(url)
@@ -690,22 +762,22 @@ def _fetch_feed(url: str, limit: int) -> list[dict[str, Any]]:
         raise RedditError(msg)
 
     children = data.get("data", {}).get("children", [])
-    posts: list[dict[str, Any]] = []
+    posts: list[FeedPost] = []
 
     for child in children:
         if child.get("kind") == "t3":
             post_data = child.get("data", {})
             posts.append(
-                {
-                    "title": post_data.get("title", ""),
-                    "url": f"https://www.reddit.com{post_data.get('permalink', '')}",
-                    "author": post_data.get("author", "[deleted]"),
-                    "score": post_data.get("score", 0),
-                    "upvote_ratio": post_data.get("upvote_ratio", 0.0),
-                    "num_comments": post_data.get("num_comments", 0),
-                    "created_at": _parse_timestamp(post_data.get("created_utc", 0)),
-                    "selftext": post_data.get("selftext", ""),
-                }
+                FeedPost(
+                    title=post_data.get("title", ""),
+                    url=f"https://www.reddit.com{post_data.get('permalink', '')}",
+                    author=post_data.get("author", "[deleted]"),
+                    score=post_data.get("score", 0),
+                    upvote_ratio=post_data.get("upvote_ratio", 0.0),
+                    num_comments=post_data.get("num_comments", 0),
+                    created_at=_parse_timestamp(post_data.get("created_utc", 0)),
+                    selftext=post_data.get("selftext", ""),
+                )
             )
 
     return posts
@@ -780,29 +852,27 @@ EXAMPLES:
     if args.json:
         output_data = []
         for post in posts:
-            item = {
-                "title": post["title"],
-                "url": post["url"],
-                "author": post["author"],
-                "score": post["score"],
-                "upvote_ratio": post["upvote_ratio"],
-                "num_comments": post["num_comments"],
-                "created_at": post["created_at"],
+            item: dict[str, str | int | float] = {
+                "title": post.title,
+                "url": post.url,
+                "author": post.author,
+                "score": post.score,
+                "upvote_ratio": post.upvote_ratio,
+                "num_comments": post.num_comments,
+                "created_at": post.created_at,
             }
             if args.preview > 0:
-                item["preview"] = _truncate_text(post["selftext"], args.preview)
+                item["preview"] = _truncate_text(post.selftext, args.preview)
             output_data.append(item)
         print(json.dumps(output_data, indent=2))
     else:
         for post in posts:
-            print(f"## {post['title']}")
-            print(f"URL: {post['url']}")
-            ratio_pct = int(post["upvote_ratio"] * 100)
-            print(
-                f"Author: {post['author']} | Score: {post['score']} ({ratio_pct}%) | Comments: {post['num_comments']}"
-            )
-            if args.preview > 0 and post["selftext"]:
-                preview = _truncate_text(post["selftext"], args.preview)
+            print(f"## {post.title}")
+            print(f"URL: {post.url}")
+            ratio_pct = int(post.upvote_ratio * 100)
+            print(f"Author: {post.author} | Score: {post.score} ({ratio_pct}%) | Comments: {post.num_comments}")
+            if args.preview > 0 and post.selftext:
+                preview = _truncate_text(post.selftext, args.preview)
                 print(f"> {preview}")
             print("\n---\n")
 
