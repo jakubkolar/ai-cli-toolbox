@@ -10,6 +10,7 @@ dependencies = [
     { name = "html2text" },
     { name = "imap-tools" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "youtube-transcript-api" },
     { name = "yt-dlp" },
 ]
@@ -28,6 +29,7 @@ requires-dist = [
     { name = "html2text" },
     { name = "imap-tools" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "youtube-transcript-api" },
     { name = "yt-dlp" },
 ]

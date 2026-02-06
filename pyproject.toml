@@ -12,6 +12,7 @@ dependencies = [
     "html2text",
     "imap-tools",
     "python-dotenv",
+    "requests",
     "yt-dlp",
     "youtube-transcript-api",
 ]
@@ -29,6 +30,9 @@ email-move = "ai_cli_toolbox.email_utils:main_move"
 email-flag = "ai_cli_toolbox.email_utils:main_flag"
 email-draft = "ai_cli_toolbox.email_utils:main_draft"
 email-folder = "ai_cli_toolbox.email_utils:main_folder"
+reddit-scrape = "ai_cli_toolbox.reddit_utils:main_scrape"
+reddit-batch-scrape = "ai_cli_toolbox.reddit_utils:main_batch_scrape"
+reddit-feed = "ai_cli_toolbox.reddit_utils:main_feed"
 
 [dependency-groups]
 dev = [
