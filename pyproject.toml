@@ -11,6 +11,8 @@ dependencies = [
     "firecrawl-py",
     "html2text",
     "imap-tools",
+    "openai>=1.40.0",
+    "pydantic>=2.0",
     "python-dotenv",
     "requests",
     "yt-dlp",
@@ -33,6 +35,7 @@ email-folder = "ai_cli_toolbox.email_utils:main_folder"
 reddit-scrape = "ai_cli_toolbox.reddit_utils:main_scrape"
 reddit-batch-scrape = "ai_cli_toolbox.reddit_utils:main_batch_scrape"
 reddit-feed = "ai_cli_toolbox.reddit_utils:main_feed"
+audio-transcribe = "ai_cli_toolbox.audio_transcribe:main"
 
 [dependency-groups]
 dev = [
@@ -126,6 +129,9 @@ convention = "pep257"
 ]
 "src/ai_cli_toolbox/*_utils.py" = [
     "T201",  # print statements are the primary output mechanism for CLI tools
+]
+"src/ai_cli_toolbox/audio_transcribe.py" = [
+    "T201",  # stdout JSON output is the primary output mechanism
 ]
 
 [tool.ruff.format]
