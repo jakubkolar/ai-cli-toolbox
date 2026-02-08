@@ -539,6 +539,10 @@ def _build_metadata(
             audio_tokens = usage.prompt_tokens_details.audio_tokens
         if usage.completion_tokens_details is not None:
             reasoning_tokens = usage.completion_tokens_details.reasoning_tokens
+        if usage.model_extra and "cost" in usage.model_extra:
+            raw_cost = usage.model_extra["cost"]
+            if isinstance(raw_cost, (int, float)):
+                total_cost = float(raw_cost)
 
     cost = UsageCost(
         total=total_cost,
@@ -630,10 +634,13 @@ def _run_transcription(args: argparse.Namespace) -> int:
 
     # Determine model and thinking effort
     model = ModelChoice.PRO if args.pro else ModelChoice.FLASH
-    thinking_effort = ThinkingEffort(args.thinking_effort)
-    if model == ModelChoice.PRO and thinking_effort == ThinkingEffort.MINIMAL:
-        sys.stderr.write("Pro model does not support 'minimal' thinking effort, using 'low'\n")
-        thinking_effort = ThinkingEffort.LOW
+    if args.thinking_effort is None:
+        thinking_effort = ThinkingEffort.LOW if model == ModelChoice.PRO else ThinkingEffort.MINIMAL
+    else:
+        thinking_effort = ThinkingEffort(args.thinking_effort)
+        if model == ModelChoice.PRO and thinking_effort == ThinkingEffort.MINIMAL:
+            sys.stderr.write("Pro model does not support 'minimal' thinking effort, using 'low'\n")
+            thinking_effort = ThinkingEffort.LOW
 
     # Duration and cost estimation (optional, requires ffprobe)
     _print_duration_estimate(resolved_path, model)
@@ -751,9 +758,9 @@ EXAMPLES:
     parser.add_argument(
         "--thinking-effort",
         choices=[e.value for e in ThinkingEffort],
-        default=ThinkingEffort.MINIMAL.value,
+        default=None,
         metavar="LEVEL",
-        help="thinking effort: minimal, low, medium, high (default: minimal)",
+        help="thinking effort: minimal, low, medium, high (default: minimal for Flash, low for Pro)",
     )
     parser.add_argument(
         "--dry-run",
