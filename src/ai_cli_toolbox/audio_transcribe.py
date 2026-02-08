@@ -9,6 +9,7 @@ import argparse
 import base64
 import os
 import re
+import subprocess  # noqa: S404  # ffprobe invocation with fixed arguments, no user input in command
 import sys
 import time
 from dataclasses import dataclass
@@ -145,6 +146,15 @@ class StreamResult:
     error: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class CostEstimate:
+    """Pre-upload cost and duration estimate."""
+
+    estimated_tokens: int
+    estimated_cost: float
+    duration_formatted: str
+
+
 # =============================================================================
 # TypedDicts for API Message Construction
 # =============================================================================
@@ -260,6 +270,58 @@ def _validate_input(path: Path) -> tuple[Path, AudioFormat]:
         sys.exit(1)
 
     return resolved, audio_format
+
+
+def _get_audio_duration(path: Path) -> float | None:
+    """Get audio duration in seconds using ffprobe.
+
+    Returns None if ffprobe is not available or fails.
+
+    :param path: Path to the audio file.
+    :return: Duration in seconds, or None.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603  # ffprobe is a trusted local binary
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],  # noqa: S607  # ffprobe found via PATH is expected behavior
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _estimate_cost(duration_sec: float, model: ModelChoice) -> CostEstimate:
+    """Estimate transcription cost based on audio duration.
+
+    :param duration_sec: Audio duration in seconds.
+    :param model: Model to use for pricing.
+    :return: CostEstimate with token count, cost, and formatted duration.
+    """
+    estimated_tokens = int(duration_sec * TOKENS_PER_SECOND)
+
+    # Pricing per million tokens (approximate, from OpenRouter)
+    price_per_million = 0.10 if model == ModelChoice.FLASH else 1.25
+    estimated_cost = estimated_tokens * price_per_million / 1_000_000
+
+    hours, remainder = divmod(int(duration_sec), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        duration_formatted = f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0:
+        duration_formatted = f"{minutes}m {seconds}s"
+    else:
+        duration_formatted = f"{seconds}s"
+
+    return CostEstimate(
+        estimated_tokens=estimated_tokens,
+        estimated_cost=estimated_cost,
+        duration_formatted=duration_formatted,
+    )
 
 
 def _build_messages(audio_b64: str, audio_format: AudioFormat) -> list[SystemMessage | UserMessage]:
@@ -526,6 +588,22 @@ def _save_raw_response(output_dir: Path, stem: str, raw_content: str) -> Path:
     return raw_path
 
 
+def _print_duration_estimate(path: Path, model: ModelChoice) -> None:
+    """Print duration and cost estimate to stderr if ffprobe is available.
+
+    :param path: Path to the audio file.
+    :param model: Model for cost estimation.
+    """
+    duration = _get_audio_duration(path)
+    if duration is not None:
+        estimate = _estimate_cost(duration, model)
+        sys.stderr.write(
+            f"Duration: {estimate.duration_formatted}, "
+            f"~{estimate.estimated_tokens:,} tokens, "
+            f"~${estimate.estimated_cost:.4f}\n"
+        )
+
+
 def _run_transcription(args: argparse.Namespace) -> int:
     """Run the transcription pipeline.
 
@@ -537,7 +615,7 @@ def _run_transcription(args: argparse.Namespace) -> int:
     input_stem = resolved_path.stem
     output_dir: Path = args.output_dir
 
-    # Read and encode audio
+    # Read audio
     sys.stderr.write(f"Reading: {resolved_path}\n")
     audio_bytes = resolved_path.read_bytes()
     sys.stderr.write(f"File size: {len(audio_bytes) / (1024 * 1024):.1f} MB\n")
@@ -548,6 +626,15 @@ def _run_transcription(args: argparse.Namespace) -> int:
     if model == ModelChoice.PRO and thinking_effort == ThinkingEffort.MINIMAL:
         sys.stderr.write("Pro model does not support 'minimal' thinking effort, using 'low'\n")
         thinking_effort = ThinkingEffort.LOW
+
+    # Duration and cost estimation (optional, requires ffprobe)
+    _print_duration_estimate(resolved_path, model)
+
+    # Dry-run: show estimates and exit
+    if args.dry_run:
+        sys.stderr.write(f"Model: {model.value}\n")
+        sys.stderr.write(f"Output would be: {output_dir / f'{input_stem}.srt'}\n")
+        return 0
 
     # Build request and stream API call
     messages = _build_messages(base64.b64encode(audio_bytes).decode("ascii"), audio_format)
@@ -629,6 +716,9 @@ EXAMPLES:
 
   # Enable more thinking for complex diarization
   audio-transcribe --thinking-effort low recording.mp3
+
+  # Check cost before transcribing
+  audio-transcribe --dry-run recording.mp3
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -656,6 +746,11 @@ EXAMPLES:
         default=ThinkingEffort.MINIMAL.value,
         metavar="LEVEL",
         help="thinking effort: minimal, low, medium, high (default: minimal)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show analysis without calling API",
     )
 
     args = parser.parse_args()
