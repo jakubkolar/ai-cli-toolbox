@@ -1,14 +1,16 @@
 """Audio transcription CLI tool.
 
 Transcribes voice recordings to SRT format with speaker diarization using
-Gemini 3 models via the OpenRouter API. Produces SRT output files with
-speaker labels and timestamps.
+Gemini 3 models via the OpenRouter API. Produces SRT output files, sidecar
+metadata JSON, and prints metadata to stdout for agent consumption.
 """
 
 import argparse
 import base64
 import os
+import re
 import sys
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -93,6 +95,42 @@ class TranscriptionResponse(BaseModel):
 
 
 # =============================================================================
+# Pydantic Models (Output Serialization)
+# =============================================================================
+
+
+class UsageCost(BaseModel):
+    """API usage and cost information."""
+
+    model_config = ConfigDict(frozen=True)
+
+    total: float | None
+    audio_tokens: int | None
+    completion_tokens: int | None
+    reasoning_tokens: int | None
+    prompt_tokens: int | None
+
+
+class TranscriptionMetadata(BaseModel):
+    """Metadata written to .meta.json and stdout."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    summary: str
+    language: str
+    speakers: list[SpeakerInfo]
+    topics: list[str]
+    key_terms: list[str]
+    duration_seconds: int
+    segment_count: int
+    cost: UsageCost
+    model: str
+    input_file: str
+    output_file: str
+
+
+# =============================================================================
 # Internal Dataclasses
 # =============================================================================
 
@@ -168,6 +206,8 @@ class ExtraBody(TypedDict, total=False):
 
 MAX_FILE_SIZE: Final = 20 * 1024 * 1024
 MAX_OUTPUT_TOKENS: Final = 65_536
+PROGRESS_INTERVAL_SEC: Final = 10
+TOKENS_PER_SECOND: Final = 32
 
 
 # =============================================================================
@@ -284,14 +324,16 @@ def _build_response_format() -> dict[str, object]:
     }
 
 
-def _call_transcription(
+def _stream_transcription(
     client: OpenAI,
     model: ModelChoice,
     messages: list[SystemMessage | UserMessage],
     response_format: dict[str, object],
     thinking_effort: ThinkingEffort,
 ) -> StreamResult:
-    """Call the transcription API (non-streaming).
+    """Stream the transcription API call with progress reporting.
+
+    Reports progress to stderr every ``PROGRESS_INTERVAL_SEC`` seconds.
 
     :param client: OpenAI client.
     :param model: Model to use.
@@ -301,20 +343,43 @@ def _call_transcription(
     :return: StreamResult with raw content and usage.
     """
     extra_body = ExtraBody(reasoning=ReasoningConfig(effort=thinking_effort.value))
+    content_parts: list[str] = []
+    usage: CompletionUsage | None = None
+    last_progress = time.monotonic()
+    start_time = last_progress
 
     try:
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model=model.value,
             messages=messages,
             response_format=response_format,
             max_tokens=MAX_OUTPUT_TOKENS,
             extra_body=extra_body,
+            stream=True,
+            stream_options={"include_usage": True},
         )
-    except Exception as e:  # noqa: BLE001  # OpenAI SDK raises various exception types (APIError, RateLimitError, etc.)
-        return StreamResult(success=False, raw_content="", usage=None, error=str(e))
+        for chunk in stream:
+            if chunk.usage:
+                usage = chunk.usage
+            if chunk.choices and chunk.choices[0].delta.content:
+                content_parts.append(chunk.choices[0].delta.content)
 
-    content = response.choices[0].message.content or ""
-    return StreamResult(success=True, raw_content=content, usage=response.usage, error=None)
+            now = time.monotonic()
+            if now - last_progress >= PROGRESS_INTERVAL_SEC:
+                elapsed = int(now - start_time)
+                total_chars = sum(len(p) for p in content_parts)
+                sys.stderr.write(f"[{elapsed}s] {total_chars:,} chars received\n")
+                last_progress = now
+
+    except Exception as e:  # noqa: BLE001  # OpenAI SDK raises various exception types during streaming
+        return StreamResult(
+            success=False,
+            raw_content="".join(content_parts),
+            usage=None,
+            error=str(e),
+        )
+
+    return StreamResult(success=True, raw_content="".join(content_parts), usage=usage, error=None)
 
 
 def _parse_response(raw_json: str) -> TranscriptionResponse | None:
@@ -327,6 +392,106 @@ def _parse_response(raw_json: str) -> TranscriptionResponse | None:
         return TranscriptionResponse.model_validate_json(raw_json)
     except ValidationError:
         return None
+
+
+def _validate_segments(segments: list[Segment]) -> list[str]:
+    """Validate transcription segments for semantic correctness.
+
+    Checks timestamp format, monotonicity, and speaker label presence.
+    Returns warning messages (empty list if all valid).
+
+    :param segments: List of transcription segments.
+    :return: List of warning messages.
+    """
+    warnings: list[str] = []
+    time_pattern = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+    prev_start = ""
+
+    for i, segment in enumerate(segments):
+        if not time_pattern.match(segment.start_time):
+            warnings.append(f"Segment {i + 1}: unparseable start_time '{segment.start_time}'")
+        if not time_pattern.match(segment.end_time):
+            warnings.append(f"Segment {i + 1}: unparseable end_time '{segment.end_time}'")
+        if prev_start and segment.start_time < prev_start:
+            warnings.append(f"Segment {i + 1}: non-monotonic start_time '{segment.start_time}' < '{prev_start}'")
+        if not segment.speaker:
+            warnings.append(f"Segment {i + 1}: empty speaker label")
+        prev_start = segment.start_time
+
+    return warnings
+
+
+def _parse_end_time_seconds(end_time: str) -> int:
+    """Parse HH:MM:SS timestamp to total seconds.
+
+    :param end_time: Timestamp string in HH:MM:SS format.
+    :return: Total seconds, or 0 if unparseable.
+    """
+    parts = end_time.split(":")
+    if len(parts) != 3:  # HH:MM:SS has exactly 3 parts
+        return 0
+    try:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except ValueError:
+        return 0
+
+
+def _build_metadata(
+    response: TranscriptionResponse,
+    usage: CompletionUsage | None,
+    model: ModelChoice,
+    input_file: str,
+    output_file: str,
+) -> TranscriptionMetadata:
+    """Build output metadata from transcription response and API usage.
+
+    :param response: Parsed transcription response.
+    :param usage: API usage statistics.
+    :param model: Model used for transcription.
+    :param input_file: Input filename.
+    :param output_file: Output SRT filename.
+    :return: TranscriptionMetadata for serialization.
+    """
+    duration_seconds = 0
+    if response.segments:
+        duration_seconds = _parse_end_time_seconds(response.segments[-1].end_time)
+
+    audio_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    prompt_tokens: int | None = None
+    total_cost: float | None = None
+
+    if usage is not None:
+        completion_tokens = usage.completion_tokens
+        prompt_tokens = usage.prompt_tokens
+        if usage.prompt_tokens_details is not None:
+            audio_tokens = usage.prompt_tokens_details.audio_tokens
+        if usage.completion_tokens_details is not None:
+            reasoning_tokens = usage.completion_tokens_details.reasoning_tokens
+
+    cost = UsageCost(
+        total=total_cost,
+        audio_tokens=audio_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        prompt_tokens=prompt_tokens,
+    )
+
+    return TranscriptionMetadata(
+        title=response.title,
+        summary=response.summary,
+        language=response.language,
+        speakers=response.speakers,
+        topics=response.topics,
+        key_terms=response.key_terms,
+        duration_seconds=duration_seconds,
+        segment_count=len(response.segments),
+        cost=cost,
+        model=model.value,
+        input_file=input_file,
+        output_file=output_file,
+    )
 
 
 def _segments_to_srt(segments: list[Segment]) -> str:
@@ -384,10 +549,10 @@ def _run_transcription(args: argparse.Namespace) -> int:
         sys.stderr.write("Pro model does not support 'minimal' thinking effort, using 'low'\n")
         thinking_effort = ThinkingEffort.LOW
 
-    # Build request and call API
+    # Build request and stream API call
     messages = _build_messages(base64.b64encode(audio_bytes).decode("ascii"), audio_format)
     sys.stderr.write(f"Transcribing with {model.value} (thinking: {thinking_effort.value})...\n")
-    result = _call_transcription(_get_client(), model, messages, _build_response_format(), thinking_effort)
+    result = _stream_transcription(_get_client(), model, messages, _build_response_format(), thinking_effort)
 
     if not result.success:
         if result.raw_content:
@@ -406,11 +571,26 @@ def _run_transcription(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Validate segments
+    for warning in _validate_segments(response.segments):
+        sys.stderr.write(f"Warning: {warning}\n")
+
     # Write SRT file
-    srt_path = output_dir / f"{input_stem}.srt"
+    srt_filename = f"{input_stem}.srt"
+    srt_path = output_dir / srt_filename
     srt_path.write_text(_segments_to_srt(response.segments), encoding="utf-8")
     sys.stderr.write(f"SRT saved to: {srt_path}\n")
-    sys.stderr.write(f"Segments: {len(response.segments)}\n")
+
+    # Build and write metadata
+    metadata = _build_metadata(response, result.usage, model, resolved_path.name, srt_filename)
+    metadata_json = metadata.model_dump_json(indent=2)
+
+    meta_path = output_dir / f"{input_stem}.meta.json"
+    meta_path.write_text(metadata_json, encoding="utf-8")
+    sys.stderr.write(f"Metadata saved to: {meta_path}\n")
+
+    # Print metadata to stdout for agent consumption
+    print(metadata_json)
 
     return 0
 
