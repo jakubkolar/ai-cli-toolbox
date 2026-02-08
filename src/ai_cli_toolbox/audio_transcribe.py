@@ -433,6 +433,14 @@ def _stream_transcription(
                 sys.stderr.write(f"[{elapsed}s] {total_chars:,} chars received\n")
                 last_progress = now
 
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        return StreamResult(
+            success=False,
+            raw_content="".join(content_parts),
+            usage=None,
+            error="Interrupted by user",
+        )
     except Exception as e:  # noqa: BLE001  # OpenAI SDK raises various exception types during streaming
         return StreamResult(
             success=False,
@@ -759,7 +767,11 @@ EXAMPLES:
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    exit_code = _run_transcription(args)
+    try:
+        exit_code = _run_transcription(args)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
     sys.exit(exit_code)
 
 
