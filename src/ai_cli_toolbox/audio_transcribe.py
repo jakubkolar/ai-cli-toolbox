@@ -290,7 +290,7 @@ def _get_audio_duration(path: Path) -> float | None:
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
-    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
     return None
 
@@ -442,11 +442,12 @@ def _stream_transcription(
             error="Interrupted by user",
         )
     except Exception as e:  # noqa: BLE001  # OpenAI SDK raises various exception types during streaming
+        error_msg = str(e)[:500]  # Truncate to avoid forwarding sensitive SDK details
         return StreamResult(
             success=False,
             raw_content="".join(content_parts),
             usage=None,
-            error=str(e),
+            error=error_msg,
         )
 
     return StreamResult(success=True, raw_content="".join(content_parts), usage=usage, error=None)
@@ -460,7 +461,8 @@ def _parse_response(raw_json: str) -> TranscriptionResponse | None:
     """
     try:
         return TranscriptionResponse.model_validate_json(raw_json)
-    except ValidationError:
+    except ValidationError as e:
+        sys.stderr.write(f"Validation error: {e}\n")
         return None
 
 
@@ -627,10 +629,8 @@ def _run_transcription(args: argparse.Namespace) -> int:
     input_stem = resolved_path.stem
     output_dir: Path = args.output_dir
 
-    # Read audio
-    sys.stderr.write(f"Reading: {resolved_path}\n")
-    audio_bytes = resolved_path.read_bytes()
-    sys.stderr.write(f"File size: {len(audio_bytes) / (1024 * 1024):.1f} MB\n")
+    sys.stderr.write(f"File: {resolved_path}\n")
+    sys.stderr.write(f"File size: {resolved_path.stat().st_size / (1024 * 1024):.1f} MB\n")
 
     # Determine model and thinking effort
     model = ModelChoice.PRO if args.pro else ModelChoice.FLASH
@@ -651,10 +651,28 @@ def _run_transcription(args: argparse.Namespace) -> int:
         sys.stderr.write(f"Output would be: {output_dir / f'{input_stem}.srt'}\n")
         return 0
 
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize client early to fail fast on missing API key
+    client = _get_client()
+
+    # Read audio
+    try:
+        audio_bytes = resolved_path.read_bytes()
+    except OSError as e:
+        sys.stderr.write(f"Error: Cannot read file: {resolved_path} ({e})\n")
+        return 1
+
     # Build request and stream API call
-    messages = _build_messages(base64.b64encode(audio_bytes).decode("ascii"), audio_format)
     sys.stderr.write(f"Transcribing with {model.value} (thinking: {thinking_effort.value})...\n")
-    result = _stream_transcription(_get_client(), model, messages, _build_response_format(), thinking_effort)
+    result = _stream_transcription(
+        client,
+        model,
+        _build_messages(base64.b64encode(audio_bytes).decode("ascii"), audio_format),
+        _build_response_format(),
+        thinking_effort,
+    )
 
     if not result.success:
         if result.raw_content:
@@ -769,10 +787,6 @@ EXAMPLES:
     )
 
     args = parser.parse_args()
-
-    # Create output directory if needed
-    output_dir: Path = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         exit_code = _run_transcription(args)
