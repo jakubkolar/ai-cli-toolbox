@@ -16,6 +16,7 @@ from ai_cli_toolbox.email_utils import (
     _attach_files,
     _build_criteria,
     _build_reply_body,
+    _build_reply_subject,
     _create_folder_parents,
     _email_block_to_dict,
     _find_special_folder,
@@ -28,6 +29,7 @@ from ai_cli_toolbox.email_utils import (
     _normalize_folder_path,
     _parse_date,
     _validate_attachments,
+    _yaml_escape,
     main_draft,
     main_flag,
     main_folder,
@@ -662,7 +664,7 @@ class TestMainList:
 
 
 # =============================================================================
-# Changeset B: _format_body, _format_email_full, _format_attachment_list
+# Email reading helpers
 # =============================================================================
 
 
@@ -674,6 +676,36 @@ def _make_full_message(**kwargs: object) -> MagicMock:
     msg.cc_values = []
     msg.html = ""
     return msg
+
+
+class TestYamlEscape:
+    def test_escapes_double_quotes(self):
+        # When
+        result = _yaml_escape('He said "hello"')
+
+        # Then
+        assert result == 'He said \\"hello\\"'
+
+    def test_escapes_backslashes(self):
+        # When
+        result = _yaml_escape("path\\to\\file")
+
+        # Then
+        assert result == "path\\\\to\\\\file"
+
+    def test_escapes_newlines(self):
+        # When
+        result = _yaml_escape("line1\nline2\rline3")
+
+        # Then
+        assert result == "line1\\nline2\\rline3"
+
+    def test_plain_string_unchanged(self):
+        # When
+        result = _yaml_escape("plain text")
+
+        # Then
+        assert result == "plain text"
 
 
 class TestFormatBody:
@@ -901,7 +933,7 @@ class TestMainMove:
 
 
 # =============================================================================
-# Changeset C: _format_date_locale, _build_reply_body, main_draft
+# Reply and draft composition helpers
 # =============================================================================
 
 
@@ -937,6 +969,36 @@ class TestFormatDateLocale:
         assert result == "2026-01-29 08:28"
 
 
+class TestBuildReplySubject:
+    def test_adds_re_prefix(self):
+        # When
+        result = _build_reply_subject("Original Subject", None)
+
+        # Then
+        assert result == "Re: Original Subject"
+
+    def test_avoids_double_re_prefix(self):
+        # When
+        result = _build_reply_subject("Re: Already replied", None)
+
+        # Then
+        assert result == "Re: Already replied"
+
+    def test_case_insensitive_re_detection(self):
+        # When
+        result = _build_reply_subject("RE: Uppercase reply", None)
+
+        # Then
+        assert result == "RE: Uppercase reply"
+
+    def test_override_replaces_subject(self):
+        # When
+        result = _build_reply_subject("Original", "Custom subject")
+
+        # Then
+        assert result == "Custom subject"
+
+
 class TestBuildReplyBody:
     def test_builds_reply_with_attribution_and_quoted_body(self):
         # Given
@@ -953,6 +1015,20 @@ class TestBuildReplyBody:
         assert "I'm fine, thanks!" in result
         assert "Jan 29, 2026 at 8:28, john@example.com:" in result
         assert "> Hello, how are you?" in result
+
+    def test_sentinel_date_shows_unknown(self):
+        # Given
+        original = MagicMock()
+        original.text = "Old message"
+        original.html = ""
+        original.date = datetime.datetime(1900, 1, 1, 0, 0, tzinfo=datetime.UTC)
+        original.from_ = "sender@example.com"
+
+        # When
+        result = _build_reply_body(original, "Reply", "en")
+
+        # Then
+        assert "Unknown, sender@example.com:" in result
 
     def test_re_prefix_dedup(self):
         # Given: subject already has Re: (tested in main_draft, but verifying concept)
@@ -1071,7 +1147,7 @@ class TestMainDraft:
 
 
 # =============================================================================
-# Changeset E: Attachment helpers and draft with attachments
+# Attachment helpers
 # =============================================================================
 
 

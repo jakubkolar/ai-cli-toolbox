@@ -31,6 +31,8 @@ from firecrawl.types import CrawlErrorsResponse, CrawlJob, Document, ScrapeOptio
 
 
 class PageSaveStatus(StrEnum):
+    """Status of a single crawl page save operation."""
+
     SAVED = "saved"
     SKIPPED = "skipped"
     NO_URL = "no_url"
@@ -717,10 +719,8 @@ def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int, *, timeout: i
     :return: The final or last-known crawl job status.
     """
     start = time.monotonic()
-    last_status: CrawlJob | None = None
     while True:
         status = client.get_crawl_status(job_id)
-        last_status = status
 
         # Track progress via scraped page count
         scraped = status.completed
