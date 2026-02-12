@@ -243,7 +243,7 @@ EXAMPLES:
     if args.output:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(output)
+        output_path.write_text(output, encoding="utf-8")
         sys.stderr.write(f"Saved to: {output_path}\n")
     else:
         print(output)
@@ -555,6 +555,7 @@ EXAMPLES:
             print(item.description or "No description")
             print("\n---\n")
 
+    # Firecrawl pricing: 2 credits per 10 results, rounded up
     used = (len(results_data) + 9) // 10 * 2
     _print_credits(used)
 
@@ -686,7 +687,7 @@ def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -
 
     title = page.metadata.title if page.metadata and page.metadata.title else "Untitled"
     content = page.markdown or ""
-    file_path.write_text(_format_markdown_output(content, title, page_url))
+    file_path.write_text(_format_markdown_output(content, title, page_url), encoding="utf-8")
     return PageSaveStatus.SAVED
 
 
@@ -905,7 +906,7 @@ EXAMPLES:
             result = client.get_crawl_status(job_id)
         except Exception as e:  # noqa: BLE001  # must not lose already-crawled pages
             sys.stderr.write(f"Failed to fetch crawl status: {e}\n")
-            result = CrawlJob(status="cancelled", data=[], completed=0, total=0, credits_used=0, expires_at="")
+            result = CrawlJob(status="cancelled")
 
     pages = result.data or []
     saved_count, skipped_count = _save_all_pages(pages, output_dir, skip_existing=args.skip_existing)
