@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlparse
 from xml.etree.ElementTree import (  # noqa: S405  # we generate XML, not parse untrusted input
     Element,
@@ -25,14 +25,14 @@ from xml.etree.ElementTree import (  # noqa: S405  # we generate XML, not parse 
 
 import requests
 
-USER_AGENT = (
+USER_AGENT: Final = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-REDDIT_DOMAINS = {"reddit.com", "www.reddit.com", "old.reddit.com"}
-DEFAULT_MAX_DEPTH = 5
+REDDIT_DOMAINS: Final = {"reddit.com", "www.reddit.com", "old.reddit.com"}
+DEFAULT_MAX_DEPTH: Final = 5
 
-RATE_LIMIT_EPILOG = """
+RATE_LIMIT_EPILOG: Final = """
 NOTE: Reddit rate limits unauthenticated requests to ~10 per minute.
 If you receive a 429 error, wait 1-2 minutes before retrying.
 This is a temporary limit, not a permanent failure.
@@ -147,7 +147,7 @@ def _fetch_json(url: str) -> dict[str, Any] | list[Any]:
     headers = {"User-Agent": USER_AGENT}
 
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=30, allow_redirects=False)
     except requests.RequestException as e:
         msg = f"Network error: {e}"
         raise RedditError(msg) from e
@@ -222,7 +222,7 @@ def _slugify_url(url: str, max_length: int = 100) -> str:
         base = slug or "reddit"
 
     url_hash = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324  # not cryptographic, used for filename uniqueness
-    max_base_length = max_length - len(url_hash) - 5  # 5 = underscore + .xml
+    max_base_length = max(0, max_length - len(url_hash) - 5)  # 5 = underscore + .xml
 
     if len(base) > max_base_length:
         base = base[:max_base_length]
@@ -234,9 +234,10 @@ def _truncate_text(text: str, length: int) -> str:
     """Truncate text with ellipsis for preview.
 
     :param text: Text to truncate.
-    :param length: Maximum length (including ellipsis).
+    :param length: Maximum length (including ellipsis). Values below 3 are clamped to 3.
     :return: Truncated text with ... if needed.
     """
+    length = max(length, 3)
     if len(text) <= length:
         return text
     return text[: length - 3] + "..."
@@ -326,6 +327,7 @@ def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: 
 
     children = listing.get("data", {}).get("children", [])
 
+    more_count = 0
     for child in children:
         kind = child.get("kind")
 
@@ -333,8 +335,11 @@ def _parse_comment_tree(listing: dict[str, Any], max_depth: int, current_depth: 
             comment = _parse_comment(child.get("data", {}), max_depth, current_depth)
             if comment is not None:
                 comments.append(comment)
+        elif kind == "more":
+            more_count += child.get("data", {}).get("count", 0)
 
-        # Skip "more" markers for now - expansion would require additional requests
+    if more_count > 0:
+        sys.stderr.write(f"Note: {more_count} additional comments not expanded.\n")
 
     return tuple(comments)
 
@@ -534,6 +539,14 @@ EXAMPLES:
 
     args = parser.parse_args()
 
+    try:
+        _run_scrape(args)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+
+
+def _run_scrape(args: argparse.Namespace) -> None:
     if args.output:
         output_path = Path(args.output)
         if _check_output_exists(output_path, force=args.force):
@@ -605,9 +618,7 @@ def _truncate_url(url: str, max_len: int = 60) -> str:
     :param max_len: Maximum length (default 60).
     :return: Truncated URL with ellipsis if needed.
     """
-    if len(url) <= max_len:
-        return url
-    return url[: max_len - 3] + "..."
+    return _truncate_text(url, max_len)
 
 
 def main_batch_scrape() -> None:
@@ -678,6 +689,15 @@ EXAMPLES:
     )
 
     args = parser.parse_args()
+
+    try:
+        _run_batch_scrape(args)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+
+
+def _run_batch_scrape(args: argparse.Namespace) -> None:
     urls = _collect_urls_from_args_or_stdin(args.urls)
 
     if not urls:
@@ -689,35 +709,31 @@ EXAMPLES:
 
     saved, skipped, failed = 0, 0, []
 
-    try:
-        for i, url in enumerate(urls, 1):
-            sys.stderr.write(f"Scraping {i}/{len(urls)}: {_truncate_url(url)}\n")
-            file_path = output_dir / _slugify_url(url)
+    for i, url in enumerate(urls, 1):
+        sys.stderr.write(f"Scraping {i}/{len(urls)}: {_truncate_url(url)}\n")
+        file_path = output_dir / _slugify_url(url)
 
-            if file_path.exists() and not args.force:
-                sys.stderr.write(f"  Skipped (exists): {file_path.name}\n")
-                skipped += 1
-                continue
+        if file_path.exists() and not args.force:
+            sys.stderr.write(f"  Skipped (exists): {file_path.name}\n")
+            skipped += 1
+            continue
 
-            try:
-                post, comments = _scrape_thread(url, args.max_depth)
-                retrieved_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                root = _build_xml_tree(post, comments, url, retrieved_at)
-                indent(root)
+        try:
+            post, comments = _scrape_thread(url, args.max_depth)
+            retrieved_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            root = _build_xml_tree(post, comments, url, retrieved_at)
+            indent(root)
 
-                tree = ElementTree(root)
-                with file_path.open("w", encoding="utf-8") as f:
-                    f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-                    tree.write(f, encoding="unicode")
+            tree = ElementTree(root)
+            with file_path.open("w", encoding="utf-8") as f:
+                f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                tree.write(f, encoding="unicode")
 
-                saved += 1
-                sys.stderr.write(f"  Saved: {file_path.name}\n")
-            except RedditError as e:
-                sys.stderr.write(f"  Error: {e}\n")
-                failed.append(url)
-
-    except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
+            saved += 1
+            sys.stderr.write(f"  Saved: {file_path.name}\n")
+        except RedditError as e:
+            sys.stderr.write(f"  Error: {e}\n")
+            failed.append(url)
 
     sys.stderr.write(f"\nSaved: {saved}, Skipped: {skipped}, Failed: {len(failed)}\n")
     if failed:
@@ -843,6 +859,14 @@ EXAMPLES:
 
     args = parser.parse_args()
 
+    try:
+        _run_feed(args)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+
+
+def _run_feed(args: argparse.Namespace) -> None:
     try:
         posts = _fetch_feed(args.url, args.limit)
     except RedditError as e:

@@ -100,29 +100,24 @@ class TestFormatDuration:
 
 class TestSlugifyTitle:
     def test_simple_title(self):
-        # Given
-        title = "Never Gonna Give You Up"
-        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
         # When
-        filename = _slugify_title(title, url)
+        filename = _slugify_title(
+            "Never Gonna Give You Up",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
 
         # Then
-        assert filename.startswith("Never_Gonna_Give_You_Up_")
-        assert filename.endswith(".md")
-        assert len(filename) == len("Never_Gonna_Give_You_Up_") + 6 + 3  # + hash + .md
+        assert filename == "Never_Gonna_Give_You_Up_75170f.md"
 
     def test_title_with_special_characters(self):
-        # Given
-        title = "Python 3.13: What's New & Cool!"
-        url = "https://www.youtube.com/watch?v=abc123"
-
         # When
-        filename = _slugify_title(title, url)
+        filename = _slugify_title(
+            "Python 3.13: What's New & Cool!",
+            "https://www.youtube.com/watch?v=abc123",
+        )
 
         # Then
-        assert filename.startswith("Python_3_13_What_s_New_Cool_")
-        assert filename.endswith(".md")
+        assert filename == "Python_3_13_What_s_New_Cool_4da372.md"
 
     def test_long_title_is_truncated(self):
         # Given
@@ -138,16 +133,14 @@ class TestSlugifyTitle:
         assert "_" in filename  # Contains hash separator
 
     def test_empty_title_uses_fallback(self):
-        # Given
-        title = "---"
-        url = "https://www.youtube.com/watch?v=test123"
-
         # When
-        filename = _slugify_title(title, url)
+        filename = _slugify_title(
+            "---",
+            "https://www.youtube.com/watch?v=test123",
+        )
 
         # Then
-        assert filename.startswith("video_")
-        assert filename.endswith(".md")
+        assert filename == "video_750e1b.md"
 
 
 class TestFormatOutput:

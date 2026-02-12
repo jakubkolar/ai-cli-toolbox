@@ -17,6 +17,10 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
 
+# =============================================================================
+# Domain Models
+# =============================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class MetadataResult:
@@ -44,6 +48,11 @@ class ProcessResult:
     skipped: bool = False
 
 
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
 def _extract_video_id(url: str) -> str | None:
     """Extract YouTube video ID from various URL formats.
 
@@ -63,14 +72,14 @@ def _extract_video_id(url: str) -> str | None:
             query_params = parse_qs(parsed.query)
             video_ids = query_params.get("v")
             if video_ids:
-                return video_ids[0]
+                return video_ids[0] or None
         # youtube.com/embed/VIDEO_ID
         if parsed.path.startswith("/embed/"):
-            return parsed.path.split("/embed/")[1].split("/")[0]
+            return parsed.path.split("/embed/")[1].split("/")[0] or None
 
     # youtu.be/VIDEO_ID
     if parsed.netloc == "youtu.be":
-        return parsed.path.lstrip("/").split("/")[0]
+        return parsed.path.lstrip("/").split("/")[0] or None
 
     return None
 
@@ -199,16 +208,18 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
     """
     retrieved_at = datetime.now(UTC).isoformat()
 
-    # Escape quotes in title and channel for YAML
-    title_escaped = metadata.title.replace('"', '\\"')
-    channel_escaped = metadata.channel.replace('"', '\\"')
+    # Escape backslashes then quotes for YAML double-quoted scalars
+    title_escaped = metadata.title.replace("\\", "\\\\").replace('"', '\\"')
+    channel_escaped = metadata.channel.replace("\\", "\\\\").replace('"', '\\"')
+    url_escaped = metadata.url.replace("\\", "\\\\").replace('"', '\\"')
 
     # Format description with proper YAML multi-line syntax
     description_lines = metadata.description.split("\n")
     if len(description_lines) > 1 or "\n" in metadata.description:
         description_yaml = "|\n" + "\n".join(f"  {line}" for line in description_lines)
     else:
-        description_yaml = f'"{metadata.description}"'
+        desc_escaped = metadata.description.replace("\\", "\\\\").replace('"', '\\"')
+        description_yaml = f'"{desc_escaped}"'
 
     # Build optional numeric fields
     optional_fields = ""
@@ -225,7 +236,7 @@ def _format_output(metadata: MetadataResult, transcript: str | None) -> str:
 
     frontmatter = f'''---
 title: "{title_escaped}"
-url: "{metadata.url}"
+url: "{url_escaped}"
 channel: "{channel_escaped}"
 {optional_fields}description: {description_yaml}
 upload_date: "{metadata.upload_date}"
@@ -287,7 +298,14 @@ def _process_video(url: str, output_dir: Path, *, force: bool) -> ProcessResult:
 
     # Format and write output
     output = _format_output(metadata, transcript)
-    output_path.write_text(output)
+    try:
+        output_path.write_text(output)
+    except OSError as e:
+        return ProcessResult(
+            success=False,
+            path=None,
+            error=f"Failed to write {output_path}: {e}",
+        )
 
     if transcript_failed:
         sys.stderr.write("  Warning: Transcript unavailable, created partial file\n")
@@ -304,6 +322,11 @@ def _process_video(url: str, output_dir: Path, *, force: bool) -> ProcessResult:
         path=output_path,
         error=None,
     )
+
+
+# =============================================================================
+# Entry Point: yt-transcript
+# =============================================================================
 
 
 def main() -> None:
@@ -385,13 +408,17 @@ EXAMPLES:
     failures = 0
     results: list[ProcessResult] = []
 
-    for url in args.urls:
-        result = _process_video(url, output_dir, force=args.force)
-        results.append(result)
-        if result.success:
-            successes += 1
-        else:
-            failures += 1
+    try:
+        for url in args.urls:
+            result = _process_video(url, output_dir, force=args.force)
+            results.append(result)
+            if result.success:
+                successes += 1
+            else:
+                failures += 1
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
 
     # Print summary if any failures
     if failures > 0:

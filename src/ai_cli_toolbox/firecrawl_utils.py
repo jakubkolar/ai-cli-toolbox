@@ -1,7 +1,8 @@
 """Firecrawl CLI utilities for token-efficient web scraping workflows.
 
-Four CLI commands wrapping the Firecrawl Python SDK:
+Five CLI commands wrapping the Firecrawl Python SDK:
 - firecrawl-scrape: Scrape single URL to markdown
+- firecrawl-batch-scrape: Scrape multiple URLs to individual files
 - firecrawl-search: Web search with metadata results
 - firecrawl-map: Discover URLs on a website
 - firecrawl-crawl: Crawl multiple pages to files
@@ -15,12 +16,32 @@ import re
 import sys
 import time
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from firecrawl import Firecrawl
 from firecrawl.types import CrawlErrorsResponse, CrawlJob, Document, ScrapeOptions
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+
+class PageSaveStatus(StrEnum):
+    SAVED = "saved"
+    SKIPPED = "skipped"
+    NO_URL = "no_url"
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+CRAWL_POLL_INTERVAL: Final = 2
+CRAWL_POLL_TIMEOUT: Final = 600
 
 
 def _get_client() -> Firecrawl:
@@ -40,6 +61,18 @@ def _get_client() -> Firecrawl:
     return Firecrawl(api_key=api_key)  # ty: ignore[invalid-argument-type]  # SDK accepts str, ty infers wrong param type
 
 
+def _escape_yaml_double_quoted(value: str) -> str:
+    """Escape a string for use inside YAML double-quoted scalars.
+
+    Replaces backslashes and double quotes so the value is safe
+    inside a ``"..."`` YAML scalar.
+
+    :param value: Raw string value.
+    :return: Escaped string safe for YAML double-quoted context.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
 def _format_markdown_output(content: str, title: str, url: str) -> str:
     """Add YAML frontmatter to markdown content.
 
@@ -49,9 +82,11 @@ def _format_markdown_output(content: str, title: str, url: str) -> str:
     :return: Markdown string with YAML frontmatter.
     """
     scraped_at = datetime.now(UTC).isoformat()
+    safe_title = _escape_yaml_double_quoted(title)
+    safe_url = _escape_yaml_double_quoted(url)
     frontmatter = f"""---
-title: "{title}"
-url: "{url}"
+title: "{safe_title}"
+url: "{safe_url}"
 scraped_at: "{scraped_at}"
 ---
 
@@ -634,27 +669,25 @@ EXAMPLES:
 # Entry Point: firecrawl-crawl
 # =============================================================================
 
-CRAWL_POLL_INTERVAL = 2
 
-
-def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -> str:
+def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -> PageSaveStatus:
     """Save a single crawled page to file.
 
-    :return: "saved", "skipped", or "no_url"
+    :return: Status indicating whether the page was saved, skipped, or had no URL.
     """
     page_url = page.metadata.source_url if page.metadata else ""
     if not page_url:
-        return "no_url"
+        return PageSaveStatus.NO_URL
 
     file_path = output_dir / _slugify_url(page_url)
 
     if skip_existing and file_path.exists():
-        return "skipped"
+        return PageSaveStatus.SKIPPED
 
     title = page.metadata.title if page.metadata and page.metadata.title else "Untitled"
     content = page.markdown or ""
     file_path.write_text(_format_markdown_output(content, title, page_url))
-    return "saved"
+    return PageSaveStatus.SAVED
 
 
 def _save_all_pages(pages: list[Document], output_dir: Path, *, skip_existing: bool) -> tuple[int, int]:
@@ -666,26 +699,40 @@ def _save_all_pages(pages: list[Document], output_dir: Path, *, skip_existing: b
     skipped_count = 0
     for page in pages:
         status = _save_crawl_page(page, output_dir, skip_existing=skip_existing)
-        if status == "saved":
+        if status is PageSaveStatus.SAVED:
             saved_count += 1
-        elif status == "skipped":
+        elif status is PageSaveStatus.SKIPPED:
             skipped_count += 1
     return saved_count, skipped_count
 
 
-def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int) -> CrawlJob:
-    """Poll crawl status until complete/failed/cancelled, printing progress to stderr."""
+def _poll_crawl_status(client: Firecrawl, job_id: str, limit: int, *, timeout: int = CRAWL_POLL_TIMEOUT) -> CrawlJob:
+    """Poll crawl status until complete/failed/cancelled, printing progress to stderr.
+
+    :param client: Firecrawl client instance.
+    :param job_id: The crawl job ID to poll.
+    :param limit: Page limit (used for progress display when total is unknown).
+    :param timeout: Maximum seconds to poll before returning last known status.
+    :return: The final or last-known crawl job status.
+    """
+    start = time.monotonic()
+    last_status: CrawlJob | None = None
     while True:
         status = client.get_crawl_status(job_id)
+        last_status = status
 
         # Track progress via scraped page count
         scraped = status.completed
         total = status.total or limit
 
-        # Debug: show actual status value
         sys.stderr.write(f"[status={status.status}] Crawling: {scraped}/{total} pages\n")
 
         if status.status in {"completed", "failed", "cancelled"}:
+            return status
+
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout:
+            sys.stderr.write(f"Polling timeout ({timeout}s) reached. Returning last known status.\n")
             return status
 
         time.sleep(CRAWL_POLL_INTERVAL)
@@ -854,7 +901,11 @@ EXAMPLES:
             client.cancel_crawl(job_id)
         except Exception as e:  # noqa: BLE001  # best-effort cancel on interrupt, must not crash
             sys.stderr.write(f"Failed to cancel crawl: {e}\n")
-        result = client.get_crawl_status(job_id)
+        try:
+            result = client.get_crawl_status(job_id)
+        except Exception as e:  # noqa: BLE001  # must not lose already-crawled pages
+            sys.stderr.write(f"Failed to fetch crawl status: {e}\n")
+            result = CrawlJob(status="cancelled", data=[], completed=0, total=0, credits_used=0, expires_at="")
 
     pages = result.data or []
     saved_count, skipped_count = _save_all_pages(pages, output_dir, skip_existing=args.skip_existing)

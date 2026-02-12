@@ -19,7 +19,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import html2text
 from dotenv import load_dotenv
@@ -29,6 +29,10 @@ from imap_tools.message import MailAttachment, MailMessage
 
 if TYPE_CHECKING:
     from imap_tools.folder import FolderInfo
+
+
+class EmailError(Exception):
+    """Domain-specific exception for email CLI operations."""
 
 
 def _get_mailbox() -> MailBox:
@@ -124,7 +128,7 @@ def _gmail_raw_uids(mb: MailBox, query: str) -> list[str]:
     result = mb.client.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
     if result[0] != "OK":
         msg = f"Gmail search failed: {result[1]}"
-        raise Exception(msg)
+        raise EmailError(msg)
     return result[1][0].decode().split() if result[1][0] else []
 
 
@@ -438,6 +442,12 @@ EXAMPLES:
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder="INBOX"):
             dispatch[args.subcommand](mb, args)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -565,6 +575,12 @@ EXAMPLES:
             else:
                 for m in messages:
                     print(_format_email_block(m, args.preview))
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -574,7 +590,7 @@ EXAMPLES:
 
 
 # =============================================================================
-# Changeset B helpers
+# Email formatting helpers
 # =============================================================================
 
 
@@ -593,12 +609,18 @@ def _format_body(msg: MailMessage) -> str:
     return ""
 
 
+def _yaml_escape(value: str) -> str:
+    """Escape a string for use in double-quoted YAML values."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+
+
 def _format_email_full(msg: MailMessage) -> str:
     """Format email as YAML frontmatter + body for ``email-read`` markdown output."""
     date_str = msg.date.isoformat() if msg.date.year > 1900 else "Unknown"
-    from_val = msg.from_values.full if msg.from_values else msg.from_
-    to_val = ", ".join(addr.full for addr in msg.to_values) if msg.to_values else ""
-    cc_val = ", ".join(addr.full for addr in msg.cc_values) if msg.cc_values else ""
+    from_val = _yaml_escape(msg.from_values.full if msg.from_values else msg.from_)
+    to_val = _yaml_escape(", ".join(addr.full for addr in msg.to_values) if msg.to_values else "")
+    cc_val = _yaml_escape(", ".join(addr.full for addr in msg.cc_values) if msg.cc_values else "")
+    subject_val = _yaml_escape(msg.subject or "")
     flags_str = ", ".join(msg.flags) if msg.flags else ""
 
     frontmatter_lines = [
@@ -612,7 +634,7 @@ def _format_email_full(msg: MailMessage) -> str:
     frontmatter_lines.extend(
         [
             f'date: "{date_str}"',
-            f'subject: "{msg.subject}"',
+            f'subject: "{subject_val}"',
             f"flags: [{flags_str}]",
             "---",
         ]
@@ -643,7 +665,8 @@ def _save_attachments(attachments: list[MailAttachment], directory: str) -> int:
     dir_path.mkdir(parents=True, exist_ok=True)
     saved = 0
     for att in attachments:
-        filename = att.filename or f"attachment_{saved}"
+        # Sanitize to basename to prevent path traversal via malicious MIME filenames
+        filename = Path(att.filename or f"attachment_{saved}").name
         target = dir_path / filename
         counter = 1
         while target.exists():
@@ -744,6 +767,12 @@ EXAMPLES:
                 sys.stderr.write(f"Saved to: {args.output}\n")
             else:
                 print(output)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -824,6 +853,12 @@ EXAMPLES:
                 operations.append(f"-{MailMessageFlags.FLAGGED}")
 
             sys.stderr.write(f"Flagged {len(args.uids)} message(s): {' '.join(operations)}\n")
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -886,6 +921,12 @@ EXAMPLES:
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             mb.move(uid_list, target)
             sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)
@@ -895,15 +936,15 @@ EXAMPLES:
 
 
 # =============================================================================
-# Changeset C helpers
+# Reply and draft composition helpers
 # =============================================================================
 
-_LOCALE_FORMATS: dict[str, str] = {
+_LOCALE_FORMATS: Final[dict[str, str]] = {
     "en": "{month} {day}, {year} at {hour}:{minute}",
     "cs": "{day}. {month_num}. {year} v {hour}:{minute}",
 }
 
-_EN_MONTHS = (
+_EN_MONTHS: Final = (
     "Jan",
     "Feb",
     "Mar",
@@ -1081,7 +1122,7 @@ def _compose_new_draft(args: argparse.Namespace, user: str, user_body: str) -> e
 # Attachment helpers
 # =============================================================================
 
-_MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024  # 25 MB
+_MAX_ATTACHMENT_SIZE: Final = 25 * 1024 * 1024  # 25 MB
 
 
 def _validate_attachments(paths: list[str], *, force: bool) -> list[Path]:
@@ -1244,6 +1285,12 @@ SHELL QUOTING:
 
             att_note = f" ({len(attachment_paths)} attachment(s))" if attachment_paths else ""
             sys.stderr.write(f"Draft created in {drafts_folder}{att_note}\n")
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(1)
+    except EmailError as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
     except UnexpectedCommandStatusError as e:
         sys.stderr.write(f"IMAP error: {e}\n")
         sys.exit(1)

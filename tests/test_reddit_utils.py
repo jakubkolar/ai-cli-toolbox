@@ -1,11 +1,14 @@
 """Tests for reddit_utils module."""
 
+from xml.etree.ElementTree import tostring  # noqa: S405  # output-only XML generation in tests
+
 import pytest
 
 from ai_cli_toolbox.reddit_utils import (
     Comment,
     Post,
     RedditError,
+    _build_xml_tree,
     _make_json_url,
     _parse_comment,
     _parse_comment_tree,
@@ -588,3 +591,219 @@ class TestTruncateText:
 
         # Then
         assert result == "Exactly ten"
+
+    def test_length_below_three_clamped(self):
+        # When
+        result = _truncate_text("hello", 2)
+
+        # Then
+        assert result == "..."
+
+    def test_length_zero_clamped(self):
+        # When
+        result = _truncate_text("hello", 0)
+
+        # Then
+        assert result == "..."
+
+    def test_length_three_with_long_text(self):
+        # When
+        result = _truncate_text("hello", 3)
+
+        # Then
+        assert result == "..."
+
+
+class TestBuildXmlTree:
+    def test_builds_basic_xml_structure(self):
+        # Given
+        post = Post(
+            title="Test Title",
+            author="test_user",
+            score=42,
+            upvote_ratio=0.95,
+            created_at="2024-10-28T08:21:39Z",
+            num_comments=1,
+            archived=False,
+            locked=False,
+            selftext="Post body text",
+            subreddit="python",
+            url="https://www.reddit.com/r/python/comments/abc123/test/",
+        )
+        comments = (
+            Comment(
+                author="commenter",
+                score=5,
+                upvote_ratio=0.8,
+                created_at="2024-10-28T08:35:44Z",
+                depth=0,
+                is_submitter=False,
+                distinguished=None,
+                edited=False,
+                body="A comment",
+                replies=(),
+            ),
+        )
+
+        # When
+        root = _build_xml_tree(
+            post,
+            comments,
+            url="https://www.reddit.com/r/python/comments/abc123/test/",
+            retrieved_at="2024-10-28T10:00:00Z",
+        )
+
+        # Then
+        assert root.tag == "reddit-thread"
+        assert root.get("url") == "https://www.reddit.com/r/python/comments/abc123/test/"
+        assert root.get("subreddit") == "python"
+        assert root.get("retrieved_at") == "2024-10-28T10:00:00Z"
+
+        post_elem = root.find("post")
+        assert post_elem is not None
+        assert post_elem.get("title") == "Test Title"
+        assert post_elem.get("author") == "test_user"
+        assert post_elem.get("score") == "42"
+        assert post_elem.get("upvote_ratio") == "0.95"
+        assert post_elem.get("archived") == "false"
+        assert post_elem.get("locked") == "false"
+
+        selftext_elem = post_elem.find("selftext")
+        assert selftext_elem is not None
+        assert selftext_elem.text == "Post body text"
+
+        comments_elem = root.find("comments")
+        assert comments_elem is not None
+        comment_elems = comments_elem.findall("comment")
+        assert len(comment_elems) == 1
+        assert comment_elems[0].get("author") == "commenter"
+        assert comment_elems[0].get("score") == "5"
+        assert comment_elems[0].get("depth") == "0"
+
+        body_elem = comment_elems[0].find("body")
+        assert body_elem is not None
+        assert body_elem.text == "A comment"
+
+    def test_builds_nested_comment_replies(self):
+        # Given
+        post = Post(
+            title="Title",
+            author="user",
+            score=1,
+            upvote_ratio=1.0,
+            created_at="1970-01-01T00:00:00Z",
+            num_comments=2,
+            archived=False,
+            locked=False,
+            selftext="",
+            subreddit="test",
+            url="https://www.reddit.com/r/test/comments/123/post/",
+        )
+        comments = (
+            Comment(
+                author="parent",
+                score=10,
+                upvote_ratio=0.9,
+                created_at="1970-01-01T00:00:00Z",
+                depth=0,
+                is_submitter=True,
+                distinguished=None,
+                edited=True,
+                body="Parent text",
+                replies=(
+                    Comment(
+                        author="child",
+                        score=3,
+                        upvote_ratio=1.0,
+                        created_at="1970-01-01T00:00:00Z",
+                        depth=1,
+                        is_submitter=False,
+                        distinguished="moderator",
+                        edited=False,
+                        body="Child text",
+                        replies=(),
+                    ),
+                ),
+            ),
+        )
+
+        # When
+        root = _build_xml_tree(
+            post,
+            comments,
+            url="https://www.reddit.com/r/test/comments/123/post/",
+            retrieved_at="2024-01-01T00:00:00Z",
+        )
+
+        # Then
+        comment_elem = root.find("comments/comment")
+        assert comment_elem is not None
+        assert comment_elem.get("is_submitter") == "true"
+        assert comment_elem.get("edited") == "true"
+
+        replies_elem = comment_elem.find("replies")
+        assert replies_elem is not None
+        child_elem = replies_elem.find("comment")
+        assert child_elem is not None
+        assert child_elem.get("author") == "child"
+        assert child_elem.get("depth") == "1"
+        assert child_elem.get("distinguished") == "moderator"
+
+    def test_empty_comments_produces_empty_comments_element(self):
+        # Given
+        post = Post(
+            title="Title",
+            author="user",
+            score=0,
+            upvote_ratio=1.0,
+            created_at="1970-01-01T00:00:00Z",
+            num_comments=0,
+            archived=False,
+            locked=False,
+            selftext="",
+            subreddit="test",
+            url="https://www.reddit.com/r/test/comments/123/post/",
+        )
+
+        # When
+        root = _build_xml_tree(
+            post,
+            comments=(),
+            url="https://www.reddit.com/r/test/comments/123/post/",
+            retrieved_at="2024-01-01T00:00:00Z",
+        )
+
+        # Then
+        comments_elem = root.find("comments")
+        assert comments_elem is not None
+        assert len(comments_elem.findall("comment")) == 0
+
+    def test_xml_escapes_special_characters(self):
+        # Given
+        post = Post(
+            title='Title with <angle> & "quotes"',
+            author="user",
+            score=0,
+            upvote_ratio=1.0,
+            created_at="1970-01-01T00:00:00Z",
+            num_comments=0,
+            archived=False,
+            locked=False,
+            selftext="Body with <html> & entities",
+            subreddit="test",
+            url="https://www.reddit.com/r/test/comments/123/post/",
+        )
+
+        # When
+        root = _build_xml_tree(
+            post,
+            comments=(),
+            url="https://www.reddit.com/r/test/comments/123/post/",
+            retrieved_at="2024-01-01T00:00:00Z",
+        )
+
+        # Then
+        xml_str = tostring(root, encoding="unicode")
+        assert "&lt;angle&gt;" in xml_str
+        assert "&amp;" in xml_str
+        assert "&lt;html&gt;" in xml_str
