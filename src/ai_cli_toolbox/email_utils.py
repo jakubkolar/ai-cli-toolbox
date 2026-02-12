@@ -998,7 +998,7 @@ EXAMPLES:
 
     args = parser.parse_args()
 
-    try:
+    with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             messages = list(mb.fetch(AND(uid=args.uid), mark_seen=args.mark_seen))
@@ -1023,18 +1023,6 @@ EXAMPLES:
                 sys.stderr.write(f"Saved to: {args.output}\n")
             else:
                 print(output)
-    except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
-        sys.exit(1)
-    except EmailError as e:
-        sys.stderr.write(f"Error: {e}\n")
-        sys.exit(1)
-    except UnexpectedCommandStatusError as e:
-        sys.stderr.write(f"IMAP error: {e}\n")
-        sys.exit(1)
-    except (OSError, ConnectionRefusedError) as e:
-        sys.stderr.write(f"Connection error: {e}\n")
-        sys.exit(1)
 
 
 # =============================================================================
@@ -1090,7 +1078,7 @@ EXAMPLES:
     if not any((args.seen, args.unseen, args.star, args.unstar)):
         parser.error("at least one flag operation required (--seen/--unseen/--star/--unstar)")
 
-    try:
+    with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             operations: list[str] = []
@@ -1109,18 +1097,6 @@ EXAMPLES:
                 operations.append(f"-{MailMessageFlags.FLAGGED}")
 
             sys.stderr.write(f"Flagged {len(args.uids)} message(s): {' '.join(operations)}\n")
-    except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
-        sys.exit(1)
-    except EmailError as e:
-        sys.stderr.write(f"Error: {e}\n")
-        sys.exit(1)
-    except UnexpectedCommandStatusError as e:
-        sys.stderr.write(f"IMAP error: {e}\n")
-        sys.exit(1)
-    except (OSError, ConnectionRefusedError) as e:
-        sys.stderr.write(f"Connection error: {e}\n")
-        sys.exit(1)
 
 
 # =============================================================================
@@ -1172,23 +1148,11 @@ EXAMPLES:
     target = args.uids[-1]
     uid_list = args.uids[:-1]
 
-    try:
+    with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
             mb.move(uid_list, target)
             sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
-    except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
-        sys.exit(1)
-    except EmailError as e:
-        sys.stderr.write(f"Error: {e}\n")
-        sys.exit(1)
-    except UnexpectedCommandStatusError as e:
-        sys.stderr.write(f"IMAP error: {e}\n")
-        sys.exit(1)
-    except (OSError, ConnectionRefusedError) as e:
-        sys.stderr.write(f"Connection error: {e}\n")
-        sys.exit(1)
 
 
 # =============================================================================
@@ -1293,7 +1257,7 @@ SHELL QUOTING:
 
     user_body = _read_body_input(args)
 
-    try:
+    with _imap_error_handler():
         mb = _get_mailbox()
         user = os.environ["IMAP_USER"]
         with mb.login(user, os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
@@ -1310,15 +1274,3 @@ SHELL QUOTING:
 
             att_note = f" ({len(attachment_paths)} attachment(s))" if attachment_paths else ""
             sys.stderr.write(f"Draft created in {drafts_folder}{att_note}\n")
-    except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
-        sys.exit(1)
-    except EmailError as e:
-        sys.stderr.write(f"Error: {e}\n")
-        sys.exit(1)
-    except UnexpectedCommandStatusError as e:
-        sys.stderr.write(f"IMAP error: {e}\n")
-        sys.exit(1)
-    except (OSError, ConnectionRefusedError) as e:
-        sys.stderr.write(f"Connection error: {e}\n")
-        sys.exit(1)
