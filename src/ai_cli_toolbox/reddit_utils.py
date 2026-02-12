@@ -167,6 +167,11 @@ def _fetch_json(url: str) -> dict[str, Any] | list[Any]:
         msg = "Rate limited (HTTP 429)"
         raise RedditError(msg)
 
+    if 300 <= response.status_code < 400:
+        location = response.headers.get("Location", "unknown")
+        msg = f"Reddit returned a redirect to {location}. Verify the URL is correct."
+        raise RedditError(msg)
+
     if not response.ok:
         msg = f"HTTP error {response.status_code}"
         raise RedditError(msg)
@@ -709,37 +714,38 @@ def _run_batch_scrape(args: argparse.Namespace) -> None:
 
     saved, skipped, failed = 0, 0, []
 
-    for i, url in enumerate(urls, 1):
-        sys.stderr.write(f"Scraping {i}/{len(urls)}: {_truncate_url(url)}\n")
-        file_path = output_dir / _slugify_url(url)
+    try:
+        for i, url in enumerate(urls, 1):
+            sys.stderr.write(f"Scraping {i}/{len(urls)}: {_truncate_url(url)}\n")
+            file_path = output_dir / _slugify_url(url)
 
-        if file_path.exists() and not args.force:
-            sys.stderr.write(f"  Skipped (exists): {file_path.name}\n")
-            skipped += 1
-            continue
+            if file_path.exists() and not args.force:
+                sys.stderr.write(f"  Skipped (exists): {file_path.name}\n")
+                skipped += 1
+                continue
 
-        try:
-            post, comments = _scrape_thread(url, args.max_depth)
-            retrieved_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            root = _build_xml_tree(post, comments, url, retrieved_at)
-            indent(root)
+            try:
+                post, comments = _scrape_thread(url, args.max_depth)
+                retrieved_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                root = _build_xml_tree(post, comments, url, retrieved_at)
+                indent(root)
 
-            tree = ElementTree(root)
-            with file_path.open("w", encoding="utf-8") as f:
-                f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-                tree.write(f, encoding="unicode")
+                tree = ElementTree(root)
+                with file_path.open("w", encoding="utf-8") as f:
+                    f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                    tree.write(f, encoding="unicode")
 
-            saved += 1
-            sys.stderr.write(f"  Saved: {file_path.name}\n")
-        except RedditError as e:
-            sys.stderr.write(f"  Error: {e}\n")
-            failed.append(url)
-
-    sys.stderr.write(f"\nSaved: {saved}, Skipped: {skipped}, Failed: {len(failed)}\n")
-    if failed:
-        sys.stderr.write("Failed URLs:\n")
-        for url in failed:
-            sys.stderr.write(f"  - {url}\n")
+                saved += 1
+                sys.stderr.write(f"  Saved: {file_path.name}\n")
+            except RedditError as e:
+                sys.stderr.write(f"  Error: {e}\n")
+                failed.append(url)
+    finally:
+        sys.stderr.write(f"\nSaved: {saved}, Skipped: {skipped}, Failed: {len(failed)}\n")
+        if failed:
+            sys.stderr.write("Failed URLs:\n")
+            for url in failed:
+                sys.stderr.write(f"  - {url}\n")
 
     # Exit code: 0 = success, 1 = total failure, 2 = partial
     if saved == 0 and failed:
