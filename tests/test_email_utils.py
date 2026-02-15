@@ -696,6 +696,16 @@ class TestMainList:
         assert "UID: 1" in captured.out
         assert "UID: 2" not in captured.out
 
+    def test_negative_limit_errors(self):
+        # When / Then
+        with patch("sys.argv", ["email-list", "--limit", "-1"]), pytest.raises(SystemExit):
+            main_list()
+
+    def test_zero_limit_errors(self):
+        # When / Then
+        with patch("sys.argv", ["email-list", "--limit", "0"]), pytest.raises(SystemExit):
+            main_list()
+
 
 # =============================================================================
 # Email reading helpers

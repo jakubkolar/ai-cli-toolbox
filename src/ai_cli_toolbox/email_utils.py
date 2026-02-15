@@ -895,6 +895,9 @@ EXAMPLES:
 
     args = parser.parse_args()
 
+    if args.limit < 1:
+        parser.error("--limit must be a positive integer")
+
     # Validate mutual exclusivity
     filter_flags = [args.from_filter, args.subject, args.body, args.since, args.before, args.unseen]
     if args.query and any(filter_flags):
