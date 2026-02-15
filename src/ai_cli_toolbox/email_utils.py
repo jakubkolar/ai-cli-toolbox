@@ -1201,9 +1201,18 @@ EXAMPLES:
     target = args.uids[-1]
     uid_list = args.uids[:-1]
 
+    _validate_uids(uid_list)
+
     with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            fetched = list(mb.fetch(AND(uid=",".join(uid_list)), mark_seen=False))
+            found_uids = {msg.uid for msg in fetched}
+            missing = [u for u in uid_list if u not in found_uids]
+            if missing:
+                sys.stderr.write(f"Error: UID(s) not found in {args.folder}: {', '.join(missing)}\n")
+                sys.exit(1)
+
             mb.move(uid_list, target)
             sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
 

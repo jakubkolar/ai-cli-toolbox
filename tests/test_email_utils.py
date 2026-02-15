@@ -1068,6 +1068,7 @@ class TestMainMove:
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = [_make_message(uid="123")]
 
         # When
         with patch("sys.argv", ["email-move", "123", "[Gmail]/Trash"]):
@@ -1084,6 +1085,7 @@ class TestMainMove:
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = [_make_message(uid="1"), _make_message(uid="2"), _make_message(uid="3")]
 
         # When
         with patch("sys.argv", ["email-move", "1", "2", "3", "Archive"]):
@@ -1093,6 +1095,31 @@ class TestMainMove:
         mock_mb.move.assert_called_once_with(["1", "2", "3"], "Archive")
         captured = capsys.readouterr()
         assert "Moved 3 message(s) to Archive" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_move_invalid_uid_exits(self, mock_get_mb: MagicMock):
+        # When / Then
+        with patch("sys.argv", ["email-move", "abc", "Archive"]), pytest.raises(SystemExit):
+            main_move()
+
+        mock_get_mb.assert_not_called()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_move_nonexistent_uid_errors(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = []
+
+        # When / Then
+        with patch("sys.argv", ["email-move", "999999", "Archive"]), pytest.raises(SystemExit):
+            main_move()
+
+        mock_mb.move.assert_not_called()
+        captured = capsys.readouterr()
+        assert "999999" in captured.err
 
 
 # =============================================================================
