@@ -470,11 +470,14 @@ def _folder_list(mb: MailBox, args: argparse.Namespace) -> None:
 
 def _folder_create(mb: MailBox, args: argparse.Namespace) -> None:
     """Handle ``email-folder create`` subcommand."""
+    if not args.name.strip():
+        sys.stderr.write("Error: Folder name cannot be empty.\n")
+        sys.exit(1)
     delimiter = _get_delimiter(mb)
     normalized = _normalize_folder_path(args.name, delimiter)
     if mb.folder.exists(normalized):
-        sys.stderr.write(f'Error: Folder "{args.name}" already exists.\n')
-        sys.exit(1)
+        sys.stderr.write(f'Folder "{args.name}" already exists.\n')
+        return
     _create_folder_parents(mb, normalized, delimiter)
     sys.stderr.write(f'Created folder "{args.name}"\n')
 

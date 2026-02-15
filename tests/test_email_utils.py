@@ -438,15 +438,49 @@ class TestMainFolderCreate:
 
     @patch("ai_cli_toolbox.email_utils._get_mailbox")
     @patch.dict("os.environ", _ENV_CREDS)
-    def test_create_existing_folder_errors(self, mock_get_mb: MagicMock):
+    def test_create_existing_folder_succeeds_idempotent(
+        self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]
+    ):
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
         mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
         mock_mb.folder.exists.return_value = True
 
+        # When
+        with patch("sys.argv", ["email-folder", "create", "INBOX"]):
+            main_folder()
+
+        # Then
+        captured = capsys.readouterr()
+        assert "already exists" in captured.err
+        assert "Error:" not in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_create_empty_name_errors(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+
         # When / Then
-        with patch("sys.argv", ["email-folder", "create", "INBOX"]), pytest.raises(SystemExit):
+        with patch("sys.argv", ["email-folder", "create", ""]), pytest.raises(SystemExit):
+            main_folder()
+
+        captured = capsys.readouterr()
+        assert "empty" in captured.err.lower()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_create_whitespace_name_errors(self, mock_get_mb: MagicMock):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.folder.list.return_value = [_make_folder_info("INBOX")]
+
+        # When / Then
+        with patch("sys.argv", ["email-folder", "create", "  "]), pytest.raises(SystemExit):
             main_folder()
 
     @patch("ai_cli_toolbox.email_utils._get_mailbox")
