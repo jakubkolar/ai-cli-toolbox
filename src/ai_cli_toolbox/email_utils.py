@@ -78,17 +78,18 @@ def _validate_uid(value: str) -> str:
     """Validate that *value* is a positive integer UID string.
 
     :param value: UID string to validate.
-    :return: The input string unchanged on success.
+    :return: The canonicalized UID string on success (whitespace stripped, numeric).
     """
+    err = f"Error: Invalid UID '{value}': must be a positive integer.\n"
     try:
         uid_int = int(value)
     except ValueError:
-        sys.stderr.write(f"Error: Invalid UID '{value}': must be a positive integer.\n")
+        sys.stderr.write(err)
         sys.exit(1)
     if uid_int < 1:
-        sys.stderr.write(f"Error: Invalid UID '{value}': must be a positive integer.\n")
+        sys.stderr.write(err)
         sys.exit(1)
-    return value
+    return str(uid_int)
 
 
 def _validate_uids(values: list[str]) -> list[str]:
@@ -100,6 +101,22 @@ def _validate_uids(values: list[str]) -> list[str]:
     for v in values:
         _validate_uid(v)
     return values
+
+
+def _verify_uids_exist(mb: MailBox, uids: list[str], folder: str) -> None:
+    """Verify that all *uids* exist in *folder* on the server.
+
+    :param mb: An authenticated mailbox (already logged in to *folder*).
+    :param uids: UID strings to verify (must already be format-validated).
+    :param folder: Folder name, used only in the error message.
+    :raises SystemExit: If any UIDs are not found on the server.
+    """
+    fetched = list(mb.fetch(AND(uid=",".join(uids)), mark_seen=False))
+    found_uids = {msg.uid for msg in fetched if msg.uid is not None}
+    missing = [u for u in uids if u not in found_uids]
+    if missing:
+        sys.stderr.write(f"Error: UID(s) not found in {folder}: {', '.join(missing)}\n")
+        sys.exit(1)
 
 
 # =============================================================================
@@ -1127,12 +1144,7 @@ EXAMPLES:
     with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
-            fetched = list(mb.fetch(AND(uid=",".join(args.uids)), mark_seen=False))
-            found_uids = {msg.uid for msg in fetched}
-            missing = [u for u in args.uids if u not in found_uids]
-            if missing:
-                sys.stderr.write(f"Error: UID(s) not found in {args.folder}: {', '.join(missing)}\n")
-                sys.exit(1)
+            _verify_uids_exist(mb, args.uids, args.folder)
 
             operations: list[str] = []
 
@@ -1206,12 +1218,7 @@ EXAMPLES:
     with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
-            fetched = list(mb.fetch(AND(uid=",".join(uid_list)), mark_seen=False))
-            found_uids = {msg.uid for msg in fetched}
-            missing = [u for u in uid_list if u not in found_uids]
-            if missing:
-                sys.stderr.write(f"Error: UID(s) not found in {args.folder}: {', '.join(missing)}\n")
-                sys.exit(1)
+            _verify_uids_exist(mb, uid_list, args.folder)
 
             mb.move(uid_list, target)
             sys.stderr.write(f"Moved {len(uid_list)} message(s) to {target}\n")
