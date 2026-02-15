@@ -70,6 +70,39 @@ _MAX_ATTACHMENT_SIZE: Final = 25 * 1024 * 1024  # 25 MB
 
 
 # =============================================================================
+# Input validation
+# =============================================================================
+
+
+def _validate_uid(value: str) -> str:
+    """Validate that *value* is a positive integer UID string.
+
+    :param value: UID string to validate.
+    :return: The input string unchanged on success.
+    """
+    try:
+        uid_int = int(value)
+    except ValueError:
+        sys.stderr.write(f"Error: Invalid UID '{value}': must be a positive integer.\n")
+        sys.exit(1)
+    if uid_int < 1:
+        sys.stderr.write(f"Error: Invalid UID '{value}': must be a positive integer.\n")
+        sys.exit(1)
+    return value
+
+
+def _validate_uids(values: list[str]) -> list[str]:
+    """Validate a list of UID strings via :func:`_validate_uid`.
+
+    :param values: List of UID strings.
+    :return: The input list unchanged on success.
+    """
+    for v in values:
+        _validate_uid(v)
+    return values
+
+
+# =============================================================================
 # Connection helpers
 # =============================================================================
 
@@ -1003,6 +1036,7 @@ EXAMPLES:
     parser.add_argument("--raw", action="store_true", help="output raw RFC822 message")
 
     args = parser.parse_args()
+    _validate_uid(args.uid)
 
     with _imap_error_handler():
         mb = _get_mailbox()
@@ -1015,7 +1049,11 @@ EXAMPLES:
             msg = messages[0]
 
             if args.raw:
-                sys.stdout.buffer.write(msg.obj.as_bytes())
+                if args.output:
+                    Path(args.output).write_bytes(msg.obj.as_bytes())
+                    sys.stderr.write(f"Saved to: {args.output}\n")
+                else:
+                    sys.stdout.buffer.write(msg.obj.as_bytes())
                 return
 
             output = _format_email_full(msg)

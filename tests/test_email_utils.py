@@ -29,6 +29,8 @@ from ai_cli_toolbox.email_utils import (
     _normalize_folder_path,
     _parse_date,
     _validate_attachments,
+    _validate_uid,
+    _validate_uids,
     _yaml_escape,
     main_draft,
     main_flag,
@@ -79,6 +81,54 @@ def _setup_mock_mailbox() -> MagicMock:
     mock_mb.__enter__ = MagicMock(return_value=mock_mb)
     mock_mb.__exit__ = MagicMock(return_value=False)
     return mock_mb
+
+
+# =============================================================================
+# _validate_uid / _validate_uids
+# =============================================================================
+
+
+class TestValidateUid:
+    def test_valid_uid_returns_value(self):
+        # When
+        result = _validate_uid("123")
+
+        # Then
+        assert result == "123"
+
+    def test_non_numeric_uid_exits(self):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_uid("abc")
+
+    def test_zero_uid_exits(self):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_uid("0")
+
+    def test_negative_uid_exits(self):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_uid("-1")
+
+    def test_float_uid_exits(self):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_uid("1.5")
+
+
+class TestValidateUids:
+    def test_valid_uids_returns_list(self):
+        # When
+        result = _validate_uids(["1", "2", "3"])
+
+        # Then
+        assert result == ["1", "2", "3"]
+
+    def test_invalid_uid_in_list_exits(self):
+        # When / Then
+        with pytest.raises(SystemExit):
+            _validate_uids(["1", "abc", "3"])
 
 
 # =============================================================================
@@ -895,6 +945,38 @@ class TestMainRead:
         # When / Then
         with patch("sys.argv", ["email-read", "999"]), pytest.raises(SystemExit):
             main_read()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_read_invalid_uid_exits(self, mock_get_mb: MagicMock):
+        # When / Then
+        with patch("sys.argv", ["email-read", "abc"]), pytest.raises(SystemExit):
+            main_read()
+
+        mock_get_mb.assert_not_called()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_read_raw_with_output_writes_file(
+        self, mock_get_mb: MagicMock, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        msg = _make_full_message(uid="123")
+        msg.obj = MagicMock()
+        msg.obj.as_bytes.return_value = b"raw RFC822 bytes"
+        mock_mb.fetch.return_value = [msg]
+        output_file = tmp_path / "raw.eml"
+
+        # When
+        with patch("sys.argv", ["email-read", "123", "--raw", "--output", str(output_file)]):
+            main_read()
+
+        # Then
+        assert output_file.read_bytes() == b"raw RFC822 bytes"
+        captured = capsys.readouterr()
+        assert "Saved to:" in captured.err
 
 
 # =============================================================================
