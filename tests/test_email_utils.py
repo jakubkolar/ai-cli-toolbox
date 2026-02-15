@@ -28,6 +28,7 @@ from ai_cli_toolbox.email_utils import (
     _get_delimiter,
     _normalize_folder_path,
     _parse_date,
+    _read_body_input,
     _validate_attachments,
     _validate_uid,
     _validate_uids,
@@ -1172,6 +1173,50 @@ class TestBuildReplyBody:
         assert "> Test" in result
 
 
+class TestReadBodyInput:
+    def test_body_provided_returns_body(self):
+        # Given
+        args = argparse.Namespace(body="hello")
+
+        # When
+        result = _read_body_input(args)
+
+        # Then
+        assert result == "hello"
+
+    def test_body_none_reads_stdin(self):
+        # Given
+        args = argparse.Namespace(body=None)
+
+        # When
+        with patch("sys.stdin", MagicMock(isatty=MagicMock(return_value=False), read=MagicMock(return_value="stdin"))):
+            result = _read_body_input(args)
+
+        # Then
+        assert result == "stdin"
+
+    def test_body_empty_string_returns_empty(self):
+        # Given
+        args = argparse.Namespace(body="")
+
+        # When
+        result = _read_body_input(args)
+
+        # Then
+        assert result == ""  # noqa: PLC1901  # exact value assertion
+
+    def test_body_none_tty_returns_empty(self):
+        # Given
+        args = argparse.Namespace(body=None)
+
+        # When
+        with patch("sys.stdin", MagicMock(isatty=MagicMock(return_value=True))):
+            result = _read_body_input(args)
+
+        # Then
+        assert result == ""  # noqa: PLC1901  # exact value assertion
+
+
 class TestMainDraft:
     @patch("ai_cli_toolbox.email_utils._get_mailbox")
     @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
@@ -1270,6 +1315,18 @@ class TestMainDraft:
         # Should keep "Re: Already replied", not "Re: Re: Already replied"
         assert b"Re: Already replied" in draft_bytes
         assert b"Re: Re:" not in draft_bytes
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", {**_ENV_CREDS, "IMAP_USER": "me@test.com"})
+    def test_draft_reply_invalid_uid_exits(self, mock_get_mb: MagicMock):
+        # When / Then
+        with (
+            patch("sys.argv", ["email-draft", "--reply-to-uid", "abc", "--body", "test"]),
+            pytest.raises(SystemExit),
+        ):
+            main_draft()
+
+        mock_get_mb.assert_not_called()
 
 
 # =============================================================================

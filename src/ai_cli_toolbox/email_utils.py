@@ -608,7 +608,7 @@ def _build_reply_body(original: MailMessage, user_body: str, locale: str) -> str
 
 def _read_body_input(args: argparse.Namespace) -> str:
     """Return body from args or stdin."""
-    if args.body:
+    if args.body is not None:
         return args.body
     if not sys.stdin.isatty():
         return sys.stdin.read()
@@ -1287,6 +1287,9 @@ SHELL QUOTING:
         parser.error("--reply-all-to-uid and --reply-to-uid are mutually exclusive")
 
     reply_uid = args.reply_all_to_uid or args.reply_to_uid
+
+    if reply_uid:
+        _validate_uid(reply_uid)
 
     if not reply_uid:
         if not args.to_addr:
