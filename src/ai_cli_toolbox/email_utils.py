@@ -1122,9 +1122,18 @@ EXAMPLES:
     if not any((args.seen, args.unseen, args.star, args.unstar)):
         parser.error("at least one flag operation required (--seen/--unseen/--star/--unstar)")
 
+    _validate_uids(args.uids)
+
     with _imap_error_handler():
         mb = _get_mailbox()
         with mb.login(os.environ["IMAP_USER"], os.environ["IMAP_PASSWORD"], initial_folder=args.folder):
+            fetched = list(mb.fetch(AND(uid=",".join(args.uids)), mark_seen=False))
+            found_uids = {msg.uid for msg in fetched}
+            missing = [u for u in args.uids if u not in found_uids]
+            if missing:
+                sys.stderr.write(f"Error: UID(s) not found in {args.folder}: {', '.join(missing)}\n")
+                sys.exit(1)
+
             operations: list[str] = []
 
             if args.seen:

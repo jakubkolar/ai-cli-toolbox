@@ -992,6 +992,7 @@ class TestMainFlag:
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = [_make_message(uid="123")]
 
         # When
         with patch("sys.argv", ["email-flag", "123", "--seen"]):
@@ -1008,6 +1009,7 @@ class TestMainFlag:
         # Given
         mock_mb = _setup_mock_mailbox()
         mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = [_make_message(uid="123")]
 
         # When
         with patch("sys.argv", ["email-flag", "123", "--seen", "--star"]):
@@ -1018,6 +1020,40 @@ class TestMainFlag:
         captured = capsys.readouterr()
         assert "+\\Seen" in captured.err
         assert "+\\Flagged" in captured.err
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_flag_invalid_uid_exits(self, mock_get_mb: MagicMock):
+        # When / Then
+        with patch("sys.argv", ["email-flag", "abc", "--seen"]), pytest.raises(SystemExit):
+            main_flag()
+
+        mock_get_mb.assert_not_called()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_flag_zero_uid_exits(self, mock_get_mb: MagicMock):
+        # When / Then
+        with patch("sys.argv", ["email-flag", "0", "--seen"]), pytest.raises(SystemExit):
+            main_flag()
+
+        mock_get_mb.assert_not_called()
+
+    @patch("ai_cli_toolbox.email_utils._get_mailbox")
+    @patch.dict("os.environ", _ENV_CREDS)
+    def test_flag_nonexistent_uid_errors(self, mock_get_mb: MagicMock, capsys: pytest.CaptureFixture[str]):
+        # Given
+        mock_mb = _setup_mock_mailbox()
+        mock_get_mb.return_value = mock_mb
+        mock_mb.fetch.return_value = []
+
+        # When / Then
+        with patch("sys.argv", ["email-flag", "999999", "--seen"]), pytest.raises(SystemExit):
+            main_flag()
+
+        mock_mb.flag.assert_not_called()
+        captured = capsys.readouterr()
+        assert "999999" in captured.err
 
 
 # =============================================================================
