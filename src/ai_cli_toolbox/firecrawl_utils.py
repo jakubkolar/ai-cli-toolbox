@@ -311,8 +311,8 @@ def _scrape_single_url(client: Firecrawl, url: str, file_path: Path, *, full_pag
     """
     try:
         result = client.scrape(url, formats=["markdown"], only_main_content=not full_page)
-        title = result.metadata.title if result.metadata else "Untitled"
-        source_url = result.metadata.source_url if result.metadata else url
+        title = (result.metadata.title if result.metadata else None) or "Untitled"
+        source_url = (result.metadata.source_url if result.metadata else None) or url
         content = result.markdown or ""
         output = _format_markdown_output(content, title, source_url)
         file_path.write_text(output, encoding="utf-8")

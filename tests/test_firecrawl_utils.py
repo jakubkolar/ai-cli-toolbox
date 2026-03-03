@@ -1,6 +1,7 @@
 """Tests for firecrawl_utils module."""
 
 from ai_cli_toolbox.firecrawl_utils import (
+    _escape_yaml_double_quoted,
     _format_markdown_output,
 )
 
@@ -30,3 +31,33 @@ class TestFormatMarkdownOutput:
         assert 'title: "My Page"' in result
         assert 'url: "https://example.com"' in result
         assert result.endswith("hello")
+
+
+class TestEscapeYamlDoubleQuoted:
+    def test_empty_string(self):
+        # When
+        result = _escape_yaml_double_quoted("")
+
+        # Then
+        assert result == ""  # noqa: PLC1901  # verifying exact return value, not truthiness
+
+    def test_string_with_double_quotes(self):
+        # When
+        result = _escape_yaml_double_quoted('He said "hello"')
+
+        # Then
+        assert result == 'He said \\"hello\\"'
+
+    def test_string_with_backslashes(self):
+        # When
+        result = _escape_yaml_double_quoted("path\\to\\file")
+
+        # Then
+        assert result == "path\\\\to\\\\file"
+
+    def test_string_with_newlines(self):
+        # When
+        result = _escape_yaml_double_quoted("line one\nline two")
+
+        # Then
+        assert result == "line one line two"
