@@ -83,6 +83,8 @@ def _format_markdown_output(content: str, title: str, url: str) -> str:
     :param url: Source URL for frontmatter.
     :return: Markdown string with YAML frontmatter.
     """
+    title = title or ""
+    url = url or ""
     scraped_at = datetime.now(UTC).isoformat()
     safe_title = _escape_yaml_double_quoted(title)
     safe_url = _escape_yaml_double_quoted(url)
@@ -236,8 +238,8 @@ EXAMPLES:
         only_main_content=not args.full_page,
     )
 
-    title = result.metadata.title if result.metadata else "Untitled"
-    url = result.metadata.source_url if result.metadata else args.url
+    title = (result.metadata.title if result.metadata else None) or "Untitled"
+    url = (result.metadata.source_url if result.metadata else None) or args.url
     content = result.markdown or ""
 
     output = _format_markdown_output(content, title, url)
