@@ -680,7 +680,7 @@ def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -
 
     :return: Status indicating whether the page was saved, skipped, or had no URL.
     """
-    page_url = page.metadata.source_url if page.metadata else ""
+    page_url = (page.metadata.source_url if page.metadata else None) or ""
     if not page_url:
         return PageSaveStatus.NO_URL
 
@@ -689,7 +689,7 @@ def _save_crawl_page(page: Document, output_dir: Path, *, skip_existing: bool) -
     if skip_existing and file_path.exists():
         return PageSaveStatus.SKIPPED
 
-    title = page.metadata.title if page.metadata and page.metadata.title else "Untitled"
+    title = (page.metadata.title if page.metadata else None) or "Untitled"
     content = page.markdown or ""
     file_path.write_text(_format_markdown_output(content, title, page_url), encoding="utf-8")
     return PageSaveStatus.SAVED

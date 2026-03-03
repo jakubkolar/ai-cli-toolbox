@@ -1,9 +1,24 @@
 """Tests for firecrawl_utils module."""
 
+import re
+
 from ai_cli_toolbox.firecrawl_utils import (
     _escape_yaml_double_quoted,
     _format_markdown_output,
 )
+
+_FRONTMATTER_FIELD = re.compile(r'^(\w+):\s*"(.*)"$')
+
+
+def _parse_frontmatter(output: str) -> tuple[dict[str, str], str]:
+    parts = output.split("---\n", maxsplit=2)
+    meta: dict[str, str] = {}
+    for line in parts[1].strip().splitlines():
+        m = _FRONTMATTER_FIELD.match(line)
+        if m:
+            meta[m.group(1)] = m.group(2)
+    body = parts[2].lstrip("\n")
+    return meta, body
 
 
 class TestFormatMarkdownOutput:
@@ -12,25 +27,31 @@ class TestFormatMarkdownOutput:
         result = _format_markdown_output(content="text", title=None, url="https://example.com")  # type: ignore[arg-type]  # testing None guard
 
         # Then
-        assert 'title: ""' in result
-        assert 'url: "https://example.com"' in result
+        meta, body = _parse_frontmatter(result)
+        assert meta["title"] == ""  # noqa: PLC1901  # verifying exact empty-string fallback, not truthiness
+        assert meta["url"] == "https://example.com"
+        assert body == "text"
 
     def test_none_url_uses_fallback(self):
         # When
         result = _format_markdown_output(content="text", title="Title", url=None)  # type: ignore[arg-type]  # testing None guard
 
         # Then
-        assert 'url: ""' in result
+        meta, body = _parse_frontmatter(result)
+        assert meta["url"] == ""  # noqa: PLC1901  # verifying exact empty-string fallback, not truthiness
+        assert meta["title"] == "Title"
+        assert body == "text"
 
     def test_valid_inputs_returns_frontmatter(self):
         # When
         result = _format_markdown_output(content="hello", title="My Page", url="https://example.com")
 
         # Then
-        assert result.startswith("---\n")
-        assert 'title: "My Page"' in result
-        assert 'url: "https://example.com"' in result
-        assert result.endswith("hello")
+        meta, body = _parse_frontmatter(result)
+        assert meta["title"] == "My Page"
+        assert meta["url"] == "https://example.com"
+        assert "scraped_at" in meta
+        assert body == "hello"
 
 
 class TestEscapeYamlDoubleQuoted:
