@@ -214,7 +214,7 @@ class ExtraBody(TypedDict, total=False):
 # Constants
 # =============================================================================
 
-MAX_FILE_SIZE: Final = 20 * 1024 * 1024
+MAX_FILE_SIZE: Final = 30 * 1024 * 1024
 MAX_OUTPUT_TOKENS: Final = 65_536
 PROGRESS_INTERVAL_SEC: Final = 10
 TOKENS_PER_SECOND: Final = 32

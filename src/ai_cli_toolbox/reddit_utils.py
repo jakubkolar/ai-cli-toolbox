@@ -9,6 +9,7 @@ Three CLI commands for Reddit content retrieval:
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -25,10 +26,20 @@ from xml.etree.ElementTree import (  # noqa: S405  # we generate XML, not parse 
 
 import requests
 
+# Reddit gates content endpoints behind a bot challenge served via Fastly: a fresh
+# request gets HTTP 403 unless it carries the anonymous clearance cookies that
+# Fastly/Reddit set after the JS challenge passes -- no login required. Two things are
+# therefore required (verified empirically; the TLS fingerprint is NOT checked):
+#   1. A User-Agent header that is not ``curl/*``. Reddit blocklists the literal curl
+#      UA; an ordinary browser UA passes and is stable.
+#   2. Those clearance cookies -- supplied ONLY via the REDDIT_COOKIES env var (a raw
+#      Cookie-header string copied from a browser tab). We never read any browser
+#      cookie store: no filesystem access, no Keychain/TCC prompts.
 USER_AGENT: Final = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+
 REDDIT_DOMAINS: Final = {"reddit.com", "www.reddit.com", "old.reddit.com"}
 DEFAULT_MAX_DEPTH: Final = 5
 
@@ -137,23 +148,58 @@ def _make_json_url(url: str) -> str:
 # =============================================================================
 
 
+def _cookies_from_env() -> dict[str, str]:
+    """Parse cookies from the ``REDDIT_COOKIES`` environment variable.
+
+    Accepts a raw Cookie-header string as copied from a browser's dev tools, e.g.
+    ``"edgebucket=abc; csv=2; loid=def"``. This is the disk-free, no-Keychain path:
+    the caller supplies the clearance cookies explicitly, so the tool never touches
+    any browser cookie store (no Full Disk Access, no TCC prompts).
+
+    :return: Mapping of cookie name to value (empty if the variable is unset/blank).
+    """
+    raw = os.environ.get("REDDIT_COOKIES", "").strip()
+    if not raw:
+        return {}
+    cookies: dict[str, str] = {}
+    for part in raw.split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep and name:
+            cookies[name.strip()] = value.strip()
+    return cookies
+
+
 def _fetch_json(url: str) -> dict[str, Any] | list[Any]:
-    """Fetch JSON from Reddit with proper User-Agent header.
+    """Fetch JSON from Reddit with a browser User-Agent and session cookies.
 
     :param url: URL to fetch (should already have .json suffix).
     :return: Parsed JSON response.
     :raises RedditError: On HTTP errors with appropriate messages.
     """
+    cookies = _cookies_from_env()
     headers = {"User-Agent": USER_AGENT}
-
     try:
-        response = requests.get(url, headers=headers, timeout=30, allow_redirects=False)
+        response = requests.get(
+            url,
+            headers=headers,
+            cookies=cookies,
+            timeout=30,
+            allow_redirects=False,
+        )
     except requests.RequestException as e:
         msg = f"Network error: {e}"
         raise RedditError(msg) from e
 
     if response.status_code == 403:
-        msg = "Access denied. This should not happen with proper User-Agent."
+        hint = (
+            "no reddit.com cookies were supplied -- copy the Cookie header from a "
+            "working Reddit tab in your browser (dev tools > Network > any reddit.com "
+            "request > Cookie) and pass it via the REDDIT_COOKIES env var"
+            if not cookies
+            else "the supplied cookies were rejected -- they may be stale; refresh "
+            "them from a working Reddit tab and update REDDIT_COOKIES"
+        )
+        msg = f"Access denied (HTTP 403): {hint}."
         raise RedditError(msg)
 
     if response.status_code == 404:
