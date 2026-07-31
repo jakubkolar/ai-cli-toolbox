@@ -25,6 +25,7 @@ from xml.etree.ElementTree import (  # noqa: S405  # we generate XML, not parse 
 )
 
 import requests
+from dotenv import find_dotenv, load_dotenv
 
 # Reddit gates content endpoints behind a bot challenge served via Fastly: a fresh
 # request gets HTTP 403 unless it carries the anonymous clearance cookies that
@@ -32,9 +33,10 @@ import requests
 # therefore required (verified empirically; the TLS fingerprint is NOT checked):
 #   1. A User-Agent header that is not ``curl/*``. Reddit blocklists the literal curl
 #      UA; an ordinary browser UA passes and is stable.
-#   2. Those clearance cookies -- supplied ONLY via the REDDIT_COOKIES env var (a raw
-#      Cookie-header string copied from a browser tab). We never read any browser
-#      cookie store: no filesystem access, no Keychain/TCC prompts.
+#   2. Those clearance cookies -- supplied via the REDDIT_COOKIES env var (a raw
+#      Cookie-header string copied from a browser tab), set in the shell or in a .env
+#      file found from the invocation cwd upward. We never read any browser cookie
+#      store: no Keychain/TCC prompts.
 USER_AGENT: Final = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -152,12 +154,14 @@ def _cookies_from_env() -> dict[str, str]:
     """Parse cookies from the ``REDDIT_COOKIES`` environment variable.
 
     Accepts a raw Cookie-header string as copied from a browser's dev tools, e.g.
-    ``"edgebucket=abc; csv=2; loid=def"``. This is the disk-free, no-Keychain path:
-    the caller supplies the clearance cookies explicitly, so the tool never touches
-    any browser cookie store (no Full Disk Access, no TCC prompts).
+    ``"edgebucket=abc; csv=2; loid=def"``. The variable may be exported in the shell
+    or defined in a .env file found by searching upward from the current working
+    directory. The caller supplies the clearance cookies explicitly, so the tool
+    never touches any browser cookie store (no Full Disk Access, no TCC prompts).
 
     :return: Mapping of cookie name to value (empty if the variable is unset/blank).
     """
+    load_dotenv(find_dotenv(usecwd=True))
     raw = os.environ.get("REDDIT_COOKIES", "").strip()
     if not raw:
         return {}
