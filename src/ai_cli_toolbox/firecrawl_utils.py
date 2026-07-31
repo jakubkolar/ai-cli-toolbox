@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from firecrawl import Firecrawl
 from firecrawl.types import CrawlErrorsResponse, CrawlJob, Document, ScrapeOptions
 
@@ -49,13 +49,14 @@ CRAWL_POLL_TIMEOUT: Final = 600
 def _get_client() -> Firecrawl:
     """Initialize Firecrawl client with API key from environment.
 
-    Loads environment variables from .env files via python-dotenv,
-    then reads FIRECRAWL_API_KEY.
+    Loads environment variables from a .env file found by searching
+    upward from the current working directory, then reads
+    FIRECRAWL_API_KEY.
 
     :return: Initialized Firecrawl client.
     :raises SystemExit: If FIRECRAWL_API_KEY is not set.
     """
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
     api_key = os.environ.get("FIRECRAWL_API_KEY")
     if api_key is None:
         sys.stderr.write("Error: FIRECRAWL_API_KEY environment variable not set\n")
