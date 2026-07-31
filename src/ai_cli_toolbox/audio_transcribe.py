@@ -51,8 +51,8 @@ class ThinkingEffort(StrEnum):
 class ModelChoice(StrEnum):
     """Available model choices."""
 
-    FLASH = "google/gemini-3-flash-preview"
-    PRO = "google/gemini-3-pro-preview"
+    FLASH = "google/gemini-3.6-flash"
+    PRO = "google/gemini-3.1-pro-preview"
 
 
 # =============================================================================
